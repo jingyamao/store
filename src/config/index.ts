@@ -51,7 +51,7 @@ export const BudgetConfigSchema = z.object({
   /** 模型上下文窗口总大小。 */
   contextWindow: z.number().int().positive().default(64000),
   /** 留给输出的 token —— 装配上下文时必须把这部分扣掉。 */
-  reserveForOutput: z.number().int().positive().default(8000),
+  reserveForOutput: z.number().int().nonnegative().default(8000),
   /** 各层占比，使用时会归一化，不必凑成 1。 */
   layers: LayerBudgetSchema.default(parsedDefault(LayerBudgetSchema)),
 });

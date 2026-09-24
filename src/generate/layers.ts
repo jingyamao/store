@@ -36,8 +36,8 @@ export const DEFAULT_LAYER_SHARES: Record<ContextLayerId, number> = {
 };
 
 export const LAYER_NOTES: Record<ContextLayerId, string> = {
-  style: "每章必带，且刻意不裁剪 —— 它是文风不漂的基准",
-  global: "全书总纲 + 当前卷纲，提供方向感",
+  style: "优先级最高，正常挤不掉；若连它都被迫截断会明确告警",
+  global: "全书总纲 + 当前卷纲 + 境界体系，提供方向感与硬规则",
   entities: "本章出场人物的完整状态，以及相关物品与地点",
   threads: "本章相关伏笔，以及长期未回收的提醒",
   recent: "前 N 章全文 —— 语感连续性的关键",
