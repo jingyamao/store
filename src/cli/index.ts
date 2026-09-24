@@ -7,6 +7,15 @@
  */
 
 import { Command } from "commander";
+import {
+  runChapterImport,
+  runChapterList,
+  runChapterNew,
+  runChapterShow,
+  runSummaryNew,
+  runSummarySet,
+  runSummaryShow,
+} from "./commands/chapter.js";
 import { registerCollectionCommands } from "./commands/collections.js";
 import { runConfigInit, runConfigShow } from "./commands/config.js";
 import { runInit } from "./commands/init.js";
@@ -273,6 +282,70 @@ config
   .action(
     guard(async (options: { force?: boolean }) =>
       runConfigInit({ force: options.force ?? false }, globals()),
+    ),
+  );
+
+/* ── 正文与摘要 ───────────────────────────────── */
+
+const chapter = program
+  .command("chapter")
+  .description("正文与摘要 —— 自己写的内容走这里，不必经过模型");
+
+chapter
+  .command("list")
+  .description("章节总览：细纲 / 正文 / 字数 / 摘要")
+  .action(guard(async () => runChapterList(globals())));
+
+chapter
+  .command("new <chapter>")
+  .description("新建正文文件")
+  .option("-f, --force", "已存在时覆盖")
+  .action(
+    guard(async (chapterId: string, options: { force?: boolean }) =>
+      runChapterNew(chapterId, { force: options.force ?? false }, globals()),
+    ),
+  );
+
+chapter
+  .command("show <chapter>")
+  .description("查看正文")
+  .action(guard(async (chapterId: string) => runChapterShow(chapterId, globals())));
+
+chapter
+  .command("import <chapter> <file>")
+  .description("导入正文（自己写的稿子 / 外部工具产出），<file> 用 - 表示标准输入")
+  .option("-f, --force", "已存在正文时允许覆盖")
+  .action(
+    guard(async (chapterId: string, file: string, options: { force?: boolean }) =>
+      runChapterImport(chapterId, file, { force: options.force ?? false }, globals()),
+    ),
+  );
+
+const summary = chapter
+  .command("summary")
+  .description("章节摘要 —— 更早的章节靠它进入模型上下文");
+
+summary
+  .command("show <chapter>")
+  .description("查看摘要")
+  .action(guard(async (chapterId: string) => runSummaryShow(chapterId, globals())));
+
+summary
+  .command("new <chapter>")
+  .description("生成摘要骨架，四个问题各写一两行即可")
+  .option("-f, --force", "已存在时覆盖")
+  .action(
+    guard(async (chapterId: string, options: { force?: boolean }) =>
+      runSummaryNew(chapterId, { force: options.force ?? false }, globals()),
+    ),
+  );
+
+summary
+  .command("set <chapter> <file>")
+  .description("写入摘要，<file> 用 - 表示标准输入")
+  .action(
+    guard(async (chapterId: string, file: string) =>
+      runSummarySet(chapterId, file, globals()),
     ),
   );
 

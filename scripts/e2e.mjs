@@ -341,6 +341,81 @@ section("20. 没有细纲时给出可操作的下一步");
 const missing = novel(["write", "ch-0099", "--dry-run"], 1);
 check(missing.stderr.includes("novel plan new ch-0099"), "直接给出该运行的命令");
 
+/* ────────── 自己写的内容也要能进系统 ────────── */
+
+// 注意：前面的段落为了布置 lint 场景，已经用 fs 直接写了 ch-0001 / ch-0002，
+// 所以这里换一个还没有正文的章节来验证 chapter 命令。
+section("21. 手写正文导入（novel chapter）");
+const handWritten = join(SCRATCH, "hand-written.md");
+writeFileSync(
+  handWritten,
+  "第 3 章正文。林渊握紧断岳刀，感知到刀身那道裂痕又深了一分。\n",
+  "utf8",
+);
+novel(["chapter", "import", "ch-0003", handWritten]);
+check(existsSync(join(BOOK, "chapters", "ch-0003.md")), "正文已落盘");
+check(
+  novel(["chapter", "show", "ch-0003"]).stdout.includes("断岳刀"),
+  "chapter show 读得到正文",
+);
+
+section("22. 拒绝静默覆盖已有正文");
+const clash = novel(["chapter", "import", "ch-0003", handWritten], 1);
+check(clash.stderr.includes("拒绝覆盖"), "明确拒绝并说明现有字数");
+check(
+  novel(["chapter", "import", "ch-0003", handWritten, "--force"]).status === 0,
+  "加 --force 后允许替换",
+);
+
+section("23. 章节总览点出摘要缺口");
+const chapterList = novel(["chapter", "list"]);
+check(chapterList.stdout.includes("ch-0003"), "列出章节");
+check(chapterList.stdout.includes("有正文但没有摘要"), "点出摘要缺口");
+
+section("24. 摘要骨架必须被识别为「没填」");
+novel(["chapter", "summary", "new", "ch-0003"]);
+const afterScaffold = novelJson(["--json", "chapter", "list"]);
+const scaffolded = afterScaffold.chapters.find((chapter) => chapter.id === "ch-0003");
+check(scaffolded.hasText === true, "有正文");
+check(scaffolded.summaryIsPlaceholder === true, "骨架被识别为占位");
+check(scaffolded.hasSummary === false, "占位摘要不算覆盖");
+check(
+  afterScaffold.missingSummaries.includes("ch-0003"),
+  "仍计入缺失，不谎报已覆盖",
+);
+
+section("25. 手写摘要真的进入 Context Pack");
+const summaryFile = join(SCRATCH, "summary-3.md");
+writeFileSync(
+  summaryFile,
+  "### 情节\n林渊被逐出青云宗。\n\n### 状态变化\n- 物品：林渊获得断岳刀\n\n### 遗留\n苏晚为什么出现在谷口？\n",
+  "utf8",
+);
+novel(["chapter", "summary", "set", "ch-0003", summaryFile]);
+
+// 摘要要进入上下文，得有一个「更靠后」的章节来生成；默认只全文回看 2 章
+for (const id of ["ch-0004", "ch-0005", "ch-0006"]) {
+  novel(["plan", "new", id], 0, { echo: false });
+}
+const withSummary = novelJson(["--json", "write", "ch-0006", "--dry-run"]);
+const summaryLayer = withSummary.record.context.layers.find(
+  (layer) => layer.id === "summaries",
+);
+check(summaryLayer.itemCount === 1, "历史摘要层收到了 1 条");
+check(
+  summaryLayer.sources.includes("summaries/ch-0003"),
+  "来源正是手写的那份摘要",
+);
+check(summaryLayer.usedTokens > 0, "摘要真的占了 token，而不是空条目");
+
+const contextText = read(join(withSummary.runDir, "context.json"));
+check(contextText.includes("苏晚为什么出现在谷口"), "摘要正文进了上下文");
+check(!contextText.includes("（这一章发生了什么"), "骨架提示语没有混进去");
+
+section("26. 摘要在 status 里可见");
+const statusOut = novel(["status", "--no-lint"]);
+check(statusOut.stdout.includes("摘要覆盖"), "status 展示摘要覆盖率");
+
 /* ─────────────────────────────────────────────── */
 
 section(failures === 0 ? "端到端验证全部通过" : `端到端验证有 ${failures} 项失败`);

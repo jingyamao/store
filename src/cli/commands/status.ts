@@ -7,6 +7,7 @@
 import { formatChapterId } from "../../domain/ids.js";
 import { chapterNumber } from "../../domain/ids.js";
 import { createLintContext, runLint, summarize } from "../../lint/index.js";
+import { loadProgress } from "../../store/progress.js";
 import { listBookIds } from "../../store/paths.js";
 import { booksRootOf, resolveWorkspaceRoot, type GlobalOptions } from "../context.js";
 import * as ui from "../ui.js";
@@ -66,6 +67,10 @@ export async function runStatus(options: StatusOptions, global: GlobalOptions): 
 
   const { book, collections, chapters } = ctx;
   const written = ctx.latestChapterNumber;
+  const progress = await loadProgress(ctx.paths);
+  const summaryCovered = progress.chapters.filter(
+    (chapter) => chapter.hasText && chapter.hasSummary,
+  ).length;
 
   if (global.json === true) {
     process.stdout.write(
@@ -80,6 +85,9 @@ export async function runStatus(options: StatusOptions, global: GlobalOptions): 
           progress: {
             chaptersWritten: chapters.size,
             latestChapter: written === 0 ? null : formatChapterId(written),
+            totalWords: progress.totalWords,
+            summariesCovered: summaryCovered,
+            missingSummaries: progress.missingSummaries,
           },
           bible: {
             characters: collections.characters.length,
@@ -125,9 +133,29 @@ export async function runStatus(options: StatusOptions, global: GlobalOptions): 
     lines.push(
       ui.bullet(
         `已写 ${ui.bold(String(chapters.size))} 章，` +
-          `最新 ${formatChapterId(written)}`,
+          `最新 ${formatChapterId(written)}` +
+          `  ${ui.dim(`共 ${progress.totalWords.toLocaleString("en-US")} 字`)}`,
       ),
     );
+
+    const missing = progress.missingSummaries.length;
+    lines.push(
+      ui.bullet(
+        `摘要覆盖 ${summaryCovered}/${chapters.size} 章` +
+          (missing > 0 ? ui.yellow(`  ← 缺 ${missing} 章`) : ""),
+      ),
+    );
+
+    if (missing > 0) {
+      lines.push(
+        ui.bullet(
+          ui.dim(
+            "摘要是更早章节进入模型上下文的唯一途径，缺了它们长程记忆会断\n" +
+              `    novel chapter summary new ${progress.missingSummaries[0]}`,
+          ),
+        ),
+      );
+    }
   }
 
   /* Bible 规模 */

@@ -105,7 +105,4 @@ export function truncateToTokens(
 }
 
 /** 中文写作里更直观的度量：字数（不含空白）。 */
-export function countWords(text: string): number {
-  const counts = classifyChars(text);
-  return counts.fullWidth + counts.other;
-}
+export { countWords } from "../util/text.js";

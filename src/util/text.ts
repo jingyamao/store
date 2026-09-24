@@ -67,3 +67,14 @@ export function padEndWidth(text: string, width: number): string {
   const padding = width - displayWidth(text);
   return padding > 0 ? text + " ".repeat(padding) : text;
 }
+
+/**
+ * 中文写作里更直观的度量：字数（不含空白，也不含 ASCII）。
+ *
+ * 网文的「字数」就是汉字数，标点也算 —— 这正是平台统计的口径。
+ * 所以这里刻意不数 ASCII 单词：`OK` 不该算进一部中文小说的字数。
+ */
+export function countWords(text: string): number {
+  const counts = classifyChars(text);
+  return counts.fullWidth + counts.other;
+}

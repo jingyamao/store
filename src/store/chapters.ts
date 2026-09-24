@@ -79,23 +79,49 @@ export function parseChapterId(chapterId: string): string {
 
 /* ── 摘要 ─────────────────────────────────────── */
 
+export function summaryPath(paths: BookPaths, chapterId: string): string {
+  return join(paths.summariesDir, `${chapterId}.md`);
+}
+
+export async function readSummary(
+  paths: BookPaths,
+  chapterId: string,
+): Promise<string | undefined> {
+  const filePath = summaryPath(paths, chapterId);
+  if (!existsSync(filePath)) return undefined;
+  return readTextFile(filePath);
+}
+
+export async function writeSummary(
+  paths: BookPaths,
+  chapterId: string,
+  text: string,
+): Promise<void> {
+  const validated = parseChapterId(chapterId);
+  await writeTextFile(summaryPath(paths, validated), text);
+}
+
+/** 列出 summaries/ 下所有已存在的摘要 id，按章节序升序。 */
+export async function listSummaryIds(paths: BookPaths): Promise<string[]> {
+  if (!existsSync(paths.summariesDir)) return [];
+  const entries = await readdir(paths.summariesDir, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => CHAPTER_FILE_RE.exec(entry.name)?.[1])
+    .filter((id): id is string => id !== undefined)
+    .sort(compareChapterId);
+}
+
 /**
  * 载入章节摘要：章节 id → 摘要文本。
  *
- * 摘要是长程记忆的载体。M2 只负责「有就读」，写入由 M4 的状态回写负责，
- * 所以这里对缺失目录完全宽容。
+ * 摘要是长程记忆的载体。写入既可以是手写的（novel chapter summary set），
+ * 也可以是 M4 之后模型抽取的，所以这里对缺失目录完全宽容。
  */
 export async function loadSummaries(paths: BookPaths): Promise<Map<string, string>> {
   const summaries = new Map<string, string>();
-  if (!existsSync(paths.summariesDir)) return summaries;
-
-  const entries = await readdir(paths.summariesDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    const id = CHAPTER_FILE_RE.exec(entry.name)?.[1];
-    if (id === undefined) continue;
-    summaries.set(id, await readTextFile(join(paths.summariesDir, entry.name)));
+  for (const id of await listSummaryIds(paths)) {
+    summaries.set(id, await readTextFile(summaryPath(paths, id)));
   }
-
   return summaries;
 }
