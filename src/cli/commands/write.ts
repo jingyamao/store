@@ -90,9 +90,13 @@ export async function runWrite(
   const booksRoot = booksRootOf(global);
 
   const quiet = global.json === true;
-  const progress = quiet ? (): void => {} : (message: string): void => {
-    process.stdout.write(`${ui.dim("·")} ${message}\n`);
-  };
+  // 进度是诊断信息，走 stderr —— 这样即使忘了加 --json 静音，
+  // stdout 也始终只有机器可读的结果
+  const progress = quiet
+    ? (): void => {}
+    : (message: string): void => {
+        process.stderr.write(`${ui.dim("·")} ${message}\n`);
+      };
 
   const result: GenerateResult = await generateChapter({
     booksRoot,

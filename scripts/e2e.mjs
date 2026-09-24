@@ -37,14 +37,16 @@ function check(condition, message) {
 }
 
 /** 跑一条 novel 命令，回显输出并断言退出码。 */
-function novel(args, expectedExit = 0) {
+function novel(args, expectedExit = 0, options = {}) {
   const result = spawnSync(process.execPath, [CLI, "--dir", SCRATCH, ...args], {
     cwd: ROOT,
     encoding: "utf8",
   });
 
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
+  if (options.echo !== false) {
+    if (result.stdout) process.stdout.write(result.stdout);
+    if (result.stderr) process.stderr.write(result.stderr);
+  }
 
   const status = result.status ?? 1;
   if (status !== expectedExit) {
@@ -54,6 +56,12 @@ function novel(args, expectedExit = 0) {
     );
   }
   return { status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
+/** 只要输出、不回显，用于 --json 这类输出很长的命令。 */
+function novelJson(args, expectedExit = 0) {
+  const result = novel(args, expectedExit, { echo: false });
+  return JSON.parse(result.stdout);
 }
 
 const write = (path, content) => writeFileSync(path, content, "utf8");
@@ -274,6 +282,64 @@ novel(["item", "add", "item_duanyue", "--name", "断岳刀"]);
 const final = novel(["lint", "--strict"]);
 check(final.status === 0, "全部修复后 --strict 退出码为 0");
 check(final.stdout.includes("全部通过"), "输出包含「全部通过」");
+
+/* ─────────────── M2：单章生成闭环 ─────────────── */
+
+section("14. novel config init / show");
+novel(["config", "init"], 0, { echo: false });
+const cfg = novel(["config", "show"]);
+check(cfg.stdout.includes("未配置"), "没设密钥时明确显示「未配置」");
+check(cfg.stdout.includes("文风锚定"), "上下文预算分层表已渲染");
+
+section("15. 章节细纲（novel plan）");
+novel(["plan", "new", "ch-0001", "-t", "逐出宗门"]);
+// 逗号列表不需要引号 —— Windows PowerShell 也就吃不掉它
+novel(["plan", "set", "ch-0001", "cast", "char_linyuan,char_suwan"]);
+novel(["plan", "set", "ch-0001", "intent", "先铺垫，再爆发，最后收束"]);
+novel(["plan", "set", "ch-0001", "mustInclude", "断岳刀第一次出现"]);
+const planList = novel(["plan", "list"]);
+check(planList.stdout.includes("ch-0001"), "细纲已登记");
+check(
+  read(join(BOOK, "outline", "chapters", "ch-0001.yaml")).includes("先铺垫，再爆发，最后收束"),
+  "含逗号的普通文本没有被切成数组",
+);
+
+section("16. 拼错的字段名必须报错，而不是静默成功");
+const typo = novel(["plan", "set", "ch-0001", "casts", "x"], 1);
+check(typo.stderr.includes("拼错"), "指出多半是名字拼错了");
+
+section("17. novel write --dry-run（不需要 API Key）");
+const dry = novelJson(["--json", "write", "ch-0001", "--dry-run"]);
+check(dry.record.dryRun === true, "记录标记为 dry-run");
+check(dry.draft === null, "dry-run 不产生初稿");
+check(existsSync(join(dry.runDir, "context.json")), "上下文已落盘");
+check(!existsSync(join(dry.runDir, "prompt.txt")), "dry-run 不写提示词");
+
+section("18. Context Pack 分层与预算");
+const pack = JSON.parse(read(join(dry.runDir, "context.json")));
+check(pack.layers.length === 6, "六个层都在");
+check(
+  pack.layers.every((layer) => layer.usedTokens <= layer.budgetTokens),
+  "每一层都没有超出预算",
+);
+check(
+  pack.layers.some((layer) =>
+    layer.items.some((item) => item.source.includes("char_linyuan")),
+  ),
+  "细纲里的人物进了实体层",
+);
+check(
+  pack.layers.some((layer) => layer.items.some((item) => item.source === "style.md")),
+  "文风锚定进了文风层",
+);
+
+section("19. novel runs");
+const runsOut = novel(["runs"]);
+check(runsOut.stdout.includes("dry-run"), "生成历史里能看到这条记录");
+
+section("20. 没有细纲时给出可操作的下一步");
+const missing = novel(["write", "ch-0099", "--dry-run"], 1);
+check(missing.stderr.includes("novel plan new ch-0099"), "直接给出该运行的命令");
 
 /* ─────────────────────────────────────────────── */
 
