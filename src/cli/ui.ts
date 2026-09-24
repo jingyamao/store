@@ -38,36 +38,10 @@ export const gray = (text: string): string => paint("gray", text);
 
 /* ── 显示宽度 ─────────────────────────────────── */
 
-function isFullWidth(codePoint: number): boolean {
-  return (
-    (codePoint >= 0x1100 && codePoint <= 0x115f) || // 韩文字母
-    (codePoint >= 0x2e80 && codePoint <= 0x303e) || // 中日韩部首、标点
-    (codePoint >= 0x3041 && codePoint <= 0x33ff) || // 假名、注音、兼容字符
-    (codePoint >= 0x3400 && codePoint <= 0x4dbf) || // 扩展 A
-    (codePoint >= 0x4e00 && codePoint <= 0x9fff) || // 基本汉字
-    (codePoint >= 0xa000 && codePoint <= 0xa4cf) || // 彝文
-    (codePoint >= 0xac00 && codePoint <= 0xd7a3) || // 韩文音节
-    (codePoint >= 0xf900 && codePoint <= 0xfaff) || // 兼容汉字
-    (codePoint >= 0xfe30 && codePoint <= 0xfe6f) || // 兼容形式
-    (codePoint >= 0xff00 && codePoint <= 0xff60) || // 全角形式
-    (codePoint >= 0xffe0 && codePoint <= 0xffe6)
-  );
-}
+// 既要本地使用（renderTable / keyValue），又要对外保持 ui.displayWidth 这个入口
+import { displayWidth, padEndWidth } from "../util/text.js";
 
-/** 终端里实际占用的列数。 */
-export function displayWidth(text: string): number {
-  let width = 0;
-  for (const char of text) {
-    const codePoint = char.codePointAt(0) ?? 0;
-    width += isFullWidth(codePoint) ? 2 : 1;
-  }
-  return width;
-}
-
-export function padEndWidth(text: string, width: number): string {
-  const padding = width - displayWidth(text);
-  return padding > 0 ? text + " ".repeat(padding) : text;
-}
+export { displayWidth, padEndWidth };
 
 /* ── 表格 ─────────────────────────────────────── */
 
