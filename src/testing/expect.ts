@@ -16,11 +16,13 @@ interface Matchers {
   toHaveLength(expected: number): void;
   toBeTruthy(): void;
   toBeFalsy(): void;
+  toBeDefined(): void;
   toBeUndefined(): void;
   toBeNull(): void;
   toBeGreaterThan(expected: number): void;
   toBeGreaterThanOrEqual(expected: number): void;
   toBeLessThan(expected: number): void;
+  toBeLessThanOrEqual(expected: number): void;
 }
 
 export function expect(actual: unknown): Matchers {
@@ -65,11 +67,14 @@ export function expect(actual: unknown): Matchers {
 
     toBeTruthy: () => assert.ok(actual),
     toBeFalsy: () => assert.ok(!actual),
+    toBeDefined: () =>
+      assert.ok(actual !== undefined, `期望有值，实际为 undefined`),
     toBeUndefined: () => assert.strictEqual(actual, undefined),
     toBeNull: () => assert.strictEqual(actual, null),
     toBeGreaterThan: (expected) => assert.ok((actual as number) > expected),
     toBeGreaterThanOrEqual: (expected) => assert.ok((actual as number) >= expected),
     toBeLessThan: (expected) => assert.ok((actual as number) < expected),
+    toBeLessThanOrEqual: (expected) => assert.ok((actual as number) <= expected),
   };
 }
 

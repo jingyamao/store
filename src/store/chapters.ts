@@ -1,15 +1,12 @@
 /**
- * 章节正文的读取。
- *
- * M0/M1 只需要「读」—— 用于 lint 做「登记 vs 实际出现」的交叉校验。
- * 写入与生成在 M2 才需要。
+ * 章节正文的读写。
  */
 
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { chapterNumber, compareChapterId } from "../domain/ids.js";
-import { readTextFile } from "./file-io.js";
+import { readTextFile, writeTextFile } from "./file-io.js";
 import type { BookPaths } from "./paths.js";
 
 const CHAPTER_FILE_RE = /^(ch-\d{4,})\.md$/;
@@ -46,4 +43,36 @@ export function latestChapterNumber(chapters: ReadonlyMap<string, string>): numb
     }
   }
   return max;
+}
+
+/* ── 写入 ─────────────────────────────────────── */
+
+export function chapterPath(paths: BookPaths, chapterId: string): string {
+  return join(paths.chaptersDir, `${chapterId}.md`);
+}
+
+export async function readChapterText(
+  paths: BookPaths,
+  chapterId: string,
+): Promise<string | undefined> {
+  const filePath = chapterPath(paths, chapterId);
+  if (!existsSync(filePath)) return undefined;
+  return readTextFile(filePath);
+}
+
+export async function writeChapterText(
+  paths: BookPaths,
+  chapterId: string,
+  text: string,
+): Promise<void> {
+  const validated = parseChapterId(chapterId);
+  await writeTextFile(chapterPath(paths, validated), text);
+}
+
+/** 校验章节 id 格式，返回规范化结果。 */
+export function parseChapterId(chapterId: string): string {
+  if (!CHAPTER_FILE_RE.test(`${chapterId}.md`)) {
+    throw new Error(`非法章节 id: ${chapterId}（期望形如 ch-0001）`);
+  }
+  return chapterId;
 }
