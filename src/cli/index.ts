@@ -2,14 +2,19 @@
 /**
  * novel —— AI 网文创作工作台 CLI。
  *
- * M0/M1 阶段提供：书籍脚手架、Bible 集合 CRUD、确定性 lint、仪表盘。
+ * 提供：书籍脚手架、Bible 集合 CRUD、确定性 lint、仪表盘，
+ * 以及 M2 的单章生成闭环（细纲 → 开篇方案 → 初稿 → runs 记录）。
  */
 
 import { Command } from "commander";
 import { registerCollectionCommands } from "./commands/collections.js";
+import { runConfigInit, runConfigShow } from "./commands/config.js";
 import { runInit } from "./commands/init.js";
 import { runLintCommand } from "./commands/lint.js";
+import { runPlanList, runPlanNew, runPlanSet, runPlanShow } from "./commands/plan.js";
+import { runRuns } from "./commands/runs.js";
 import { runStatus } from "./commands/status.js";
+import { runWrite } from "./commands/write.js";
 import { fail, type GlobalOptions } from "./context.js";
 import { VERSION } from "./version.js";
 
@@ -139,6 +144,135 @@ program
         },
         globals(),
       ),
+    ),
+  );
+
+/* ── 章节细纲 ─────────────────────────────────── */
+
+const plan = program
+  .command("plan")
+  .description("章节细纲 —— 人机协作的第一个决策点：你定「写什么」，AI 管「怎么写」");
+
+plan
+  .command("list")
+  .description("列出所有已写细纲的章节")
+  .action(guard(async () => runPlanList(globals())));
+
+plan
+  .command("show <chapter>")
+  .description("查看某一章的细纲")
+  .action(guard(async (chapter: string) => runPlanShow(chapter, globals())));
+
+interface PlanNewCliOptions {
+  readonly title?: string;
+  readonly force?: boolean;
+}
+
+plan
+  .command("new <chapter>")
+  .description("生成细纲骨架（章节 id 形如 ch-0001）")
+  .option("-t, --title <title>", "章节标题")
+  .option("-f, --force", "已存在时覆盖")
+  .action(
+    guard(async (chapter: string, options: PlanNewCliOptions) =>
+      runPlanNew(
+        chapter,
+        {
+          ...(options.title !== undefined ? { title: options.title } : {}),
+          force: options.force ?? false,
+        },
+        globals(),
+      ),
+    ),
+  );
+
+plan
+  .command("set <chapter> <path> <value>")
+  .description("改细纲的单个字段，如 cast / intent / mustInclude")
+  .action(
+    guard(async (chapter: string, path: string, value: string) =>
+      runPlanSet(chapter, path, value, globals()),
+    ),
+  );
+
+/* ── 单章生成 ─────────────────────────────────── */
+
+interface WriteCliOptions {
+  readonly dryRun?: boolean;
+  readonly openings?: number;
+  readonly pick?: number;
+  readonly words?: number;
+  readonly apply?: boolean;
+  readonly force?: boolean;
+}
+
+program
+  .command("write <chapter>")
+  .description("生成一章初稿（默认只写进 runs/，确认后再加 --apply 落盘）")
+  .option("--dry-run", "只组装上下文并落盘，不调用模型、不需要密钥")
+  .option("--openings <n>", "开篇方案数量", (value) => Number.parseInt(value, 10))
+  .option("--pick <n>", "选中第几个开篇方案，默认 1", (value) => Number.parseInt(value, 10))
+  .option("--words <n>", "目标字数，覆盖细纲与配置", (value) => Number.parseInt(value, 10))
+  .option("--apply", "生成后写入 chapters/<章节>.md")
+  .option("--force", "配合 --apply：目标已有内容时允许覆盖")
+  .action(
+    guard(async (chapter: string, options: WriteCliOptions) =>
+      runWrite(
+        chapter,
+        {
+          ...(options.dryRun !== undefined ? { dryRun: options.dryRun } : {}),
+          ...(options.openings !== undefined && !Number.isNaN(options.openings)
+            ? { openings: options.openings }
+            : {}),
+          ...(options.pick !== undefined && !Number.isNaN(options.pick)
+            ? { pick: options.pick }
+            : {}),
+          ...(options.words !== undefined && !Number.isNaN(options.words)
+            ? { words: options.words }
+            : {}),
+          ...(options.apply !== undefined ? { apply: options.apply } : {}),
+          ...(options.force !== undefined ? { force: options.force } : {}),
+        },
+        globals(),
+      ),
+    ),
+  );
+
+interface RunsCliOptions {
+  readonly limit?: number;
+}
+
+program
+  .command("runs")
+  .description("查看历史生成记录")
+  .option("-n, --limit <n>", "显示最近多少条，默认 20", (value) => Number.parseInt(value, 10))
+  .action(
+    guard(async (options: RunsCliOptions) =>
+      runRuns(
+        options.limit !== undefined && !Number.isNaN(options.limit)
+          ? { limit: options.limit }
+          : {},
+        globals(),
+      ),
+    ),
+  );
+
+/* ── 配置 ─────────────────────────────────────── */
+
+const config = program.command("config").description("工作区配置（模型、密钥来源、上下文预算）");
+
+config
+  .command("show")
+  .description("显示当前生效的配置（密钥打码）")
+  .action(guard(async () => runConfigShow(globals())));
+
+config
+  .command("init")
+  .description("生成带注释的 novel.config.yaml")
+  .option("-f, --force", "已存在时覆盖")
+  .action(
+    guard(async (options: { force?: boolean }) =>
+      runConfigInit({ force: options.force ?? false }, globals()),
     ),
   );
 

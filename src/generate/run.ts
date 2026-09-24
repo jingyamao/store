@@ -564,6 +564,9 @@ export interface RunSummary {
   readonly startedAt: string;
   readonly dryRun: boolean;
   readonly applied: boolean;
+  readonly usedTokens: number;
+  /** 初稿体检里 error + warn 的数量，用于一眼看出哪次生成有问题。 */
+  readonly problems: number;
 }
 
 export async function listRuns(paths: BookPaths): Promise<RunSummary[]> {
@@ -585,6 +588,8 @@ export async function listRuns(paths: BookPaths): Promise<RunSummary[]> {
         startedAt: record.startedAt ?? "",
         dryRun: record.dryRun === true,
         applied: record.applied === true,
+        usedTokens: record.context?.usedTokens ?? 0,
+        problems: (record.draftCheck ?? []).filter((finding) => finding.level !== "info").length,
       });
     } catch {
       // 记录损坏不该让整个列表失败 —— 跳过它，其余的照常展示

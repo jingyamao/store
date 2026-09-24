@@ -37,7 +37,8 @@ import {
 } from "../../store/collections.js";
 import { dumpYaml, validate } from "../../store/file-io.js";
 import { resolveBook, type BookPaths } from "../../store/paths.js";
-import { deleteByPath, getByPath, parseScalar, setByPath } from "../../util/dotted-path.js";
+import { deleteByPath, getByPath, setByPath } from "../../util/dotted-path.js";
+import { describeIssue, expectsArrayIssue, parseValueForSchema } from "../value-parsing.js";
 import { booksRootOf, CliError, fail, type GlobalOptions } from "../context.js";
 import * as ui from "../ui.js";
 
@@ -292,25 +293,61 @@ async function handleSet(
   const { paths, entities } = await loadFor(def, global);
   const entity = requireEntity(def, entities, id);
 
-  const draft = structuredClone(entity) as Record<string, unknown>;
-  const previous = getByPath(draft, path);
-  const value = parseScalar(rawValue);
-  setByPath(draft, path, value);
+  const previous = getByPath(entity, path);
 
-  const next = validate(def.schema, draft, `${def.label} ${id}`) as AnyEntity;
-  const { next: updated } = upsertEntity(entities, next);
+  const parsed = parseValueForSchema<AnyEntity>(rawValue, (value) => {
+    const candidate = structuredClone(entity) as Record<string, unknown>;
+    try {
+      setByPath(candidate, path, value);
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error),
+        expectingArray: false,
+      };
+    }
+
+    const result = def.schema.safeParse(candidate);
+    if (result.success) return { ok: true as const, value: result.data as AnyEntity };
+
+    const issue = result.error.issues[0];
+    return {
+      ok: false as const,
+      message: `设置 ${path} 失败：${describeIssue(issue)}`,
+      expectingArray: expectsArrayIssue(issue),
+    };
+  });
+
+  // zod 会剥掉未知字段，所以拼错字段名时 safeParse 依然会通过。
+  // 必须在落盘前确认值确实写到了目标路径上，否则用户会以为改成功了。
+  const written = getByPath(parsed.value, path);
+  if (written === undefined) {
+    throw new CliError(
+      [
+        `${path} 没有写入 —— 这个字段不存在，多半是名字拼错了。`,
+        "",
+        `可用字段见：novel ${def.aliases[0] ?? def.key} show ${id}`,
+      ].join("\n"),
+    );
+  }
+
+  const { next: updated } = upsertEntity(entities, parsed.value);
   await writeAnyCollection(paths, def, updated);
 
   if (global.json === true) {
-    process.stdout.write(`${JSON.stringify(next, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(parsed.value, null, 2)}\n`);
     return 0;
   }
 
   const from =
     previous === undefined ? ui.dim("(未设置)") : ui.dim(JSON.stringify(previous));
+  const hint = parsed.usedListFallback
+    ? ui.dim("  （按逗号列表解析）")
+    : "";
+
   process.stdout.write(
     `${ui.green("✓")} ${id} · ${ui.bold(path)}\n` +
-      `  ${from} ${ui.dim("→")} ${JSON.stringify(value)}\n`,
+      `  ${from} ${ui.dim("→")} ${JSON.stringify(written)}${hint}\n`,
   );
   return 0;
 }
