@@ -1,0 +1,30 @@
+{
+  "name": "novel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI 网文创作工作台 —— 长篇一致性优先的人机协作写作工具",
+  "bin": {
+    "novel": "dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "novel": "tsx src/cli/index.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test:watch": "node --import tsx --test --watch \"src/**/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
