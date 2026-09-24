@@ -10,6 +10,11 @@
  */
 
 import { classifyChars, type CharClasses } from "../util/text.js";
+import type { LlmMessage } from "../llm/types.js";
+
+// LlmMessage 是模型层的基本概念，定义在 llm/types.ts；
+// 这里重新导出，让只关心 token 的调用方不必多引一个模块。
+export type { LlmMessage };
 
 export interface TokenEstimatorOptions {
   /** 每个全角字符（中日韩文字与标点）折算的 token 数。 */
@@ -45,11 +50,6 @@ export function estimateTokens(
   options: TokenEstimatorOptions = DEFAULT_TOKEN_OPTIONS,
 ): number {
   return tokenCountOf(classifyChars(text), options);
-}
-
-export interface LlmMessage {
-  readonly role: "system" | "user" | "assistant";
-  readonly content: string;
 }
 
 export function estimateMessageTokens(
