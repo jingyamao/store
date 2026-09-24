@@ -70,6 +70,14 @@ novel plan set ch-0001 cast char_linyuan,char_suwan
 novel plan set ch-0001 intent 林渊被诬陷偷窃灵药，当众逐出宗门
 novel write ch-0001 --dry-run    # 先看看会发给模型什么，不花钱
 novel write ch-0001              # 真正生成
+
+# 6. 自己写的那几章走这里，不必经过模型
+novel chapter new ch-0002        # 建文件直接写
+novel chapter import ch-0003 draft.txt   # 导入外部稿子
+
+# 7. 写完立刻补摘要 —— 它是更早章节进入模型上下文的唯一途径
+novel chapter summary new ch-0001
+novel chapter summary set ch-0001 -      # 从标准输入写入
 ```
 
 ---
@@ -167,6 +175,60 @@ novel write ch-0001 --dry-run
 
 ---
 
+## 自己写，或者把 AI 初稿改到面目全非
+
+正文进入系统**不必经过模型**。这是「自己写小说用」的基本要求 ——
+大部分章节你会自己写，或者把 AI 的稿子改得只剩个骨架。
+
+```bash
+novel chapter new ch-0007                 # 建文件，直接开始写
+novel chapter import ch-0007 draft.txt    # 导入外部稿子
+cat draft.txt | novel chapter import ch-0007 -    # 或者走标准输入
+novel chapter show ch-0007                # 看正文
+novel chapter list                        # 一眼看到哪里断了
+```
+
+`novel chapter new` 会读细纲里的标题自动带上，省得每章都敲一遍。
+导入时若目标已有正文会拒绝覆盖，并告诉你两边的字数。
+
+### 摘要 —— 长程记忆唯一的载体
+
+这一项值得单独说，因为它是长篇能不能写下去的关键。
+
+模型的上下文窗口是有限的。`recent` 层默认只全文回看最近 **2** 章 ——
+写到第 30 章时，模型对第 5 章一无所知，**除非第 5 章有摘要**。
+
+```bash
+novel chapter summary new ch-0005      # 生成骨架
+novel chapter summary set ch-0005 -    # 从标准输入写入
+novel status                           # 看覆盖率
+```
+
+摘要不需要文采，只需要准确。骨架刻意只问四个问题，每个都对应一类真实会崩的东西：
+
+| 问题 | 不写会怎样 |
+|---|---|
+| 情节 | 模型不知道发生过什么，就会重复情节或写出矛盾 |
+| 状态变化 | 谁到了哪、伤成什么样、手里拿着什么 —— 写错就是穿帮 |
+| 伏笔 | 埋了什么、收了什么，直接决定伏笔会不会被忘掉 |
+| 遗留 | 下一章开头要接住什么，断了就是「昨夜」变「三日后」 |
+
+`novel status` 与 `novel chapter list` 都会把缺口点出来：
+
+```
+· 摘要覆盖 2/5 章  ← 缺 3 章
+· 摘要是更早章节进入模型上下文的唯一途径，缺了它们长程记忆会断
+    novel chapter summary new ch-0001
+```
+
+**建了骨架但没填内容不算覆盖** —— 系统会识别出来，不会谎报「已覆盖」。
+空摘要进了上下文只会白占 token。
+
+> 摘要现在得手工写。M4 会加上从正文自动抽取的路径，但「AI 抽的摘要要你
+> 过一眼」这件事不会变 —— 摘要错了，后面几十章全跟着错。
+
+---
+
 ## 配置
 
 ```bash
@@ -214,6 +276,13 @@ Ollama 都提供 OpenAI 兼容接口。也可以用环境变量临时覆盖：
 | `novel plan set <chapter> <path> <value>` | 改细纲的单个字段 |
 | `novel write <chapter>` | 生成一章初稿。`--dry-run` 只组装上下文不调模型、`--openings <n>`、`--pick <n>`、`--words <n>`、`--apply`、`--force` |
 | `novel runs` | 查看历史生成记录。`-n/--limit <n>` |
+| `novel chapter list` | 章节总览：细纲 / 正文 / 字数 / 摘要 |
+| `novel chapter new <chapter>` | 新建正文文件。`-f` 覆盖 |
+| `novel chapter show <chapter>` | 查看正文 |
+| `novel chapter import <chapter> <file>` | 导入正文，`<file>` 用 `-` 表示标准输入。`-f` 覆盖 |
+| `novel chapter summary show <chapter>` | 查看摘要 |
+| `novel chapter summary new <chapter>` | 生成摘要骨架。`-f` 覆盖 |
+| `novel chapter summary set <chapter> <file>` | 写入摘要，`<file>` 用 `-` 表示标准输入 |
 | `novel config show` | 显示当前生效的配置（密钥打码） |
 | `novel config init` | 生成带注释的 `novel.config.yaml`。`-f` 覆盖 |
 
@@ -420,10 +489,10 @@ books/<book_id>/
 ## 开发
 
 ```bash
-npm test           # 241 个测试（Node 内置测试运行器，零原生依赖）
+npm test           # 265 个测试（Node 内置测试运行器，零原生依赖）
 npm run typecheck  # tsc --noEmit
 npm run build      # 输出到 dist/
-node scripts/e2e.mjs   # 端到端验证，20 段断言（需要先 build）
+node scripts/e2e.mjs   # 端到端验证，26 段断言（需要先 build）
 ```
 
 技术栈刻意保持精简 —— 运行时只有 3 个依赖：`zod` / `yaml` / `commander`。
@@ -439,7 +508,7 @@ node scripts/e2e.mjs   # 端到端验证，20 段断言（需要先 build）
 | **M1** | Story Bible 管理（CRUD / 伏笔追踪 / 17 条 lint） | ✅ 完成 |
 | **M2** | 单章生成闭环（Context Pack / 细纲 → 开篇 → 初稿 / runs 记录） | ✅ 完成 |
 | M3 | 自检四件套（AI 味检测 / 文风比对 / 爽点体检） | 待做 |
-| M4 | 状态回写闭环（AI 抽取 delta / diff 确认） | 待做 |
+| M4 | 状态回写闭环（AI 抽取 delta / diff 确认）+ 摘要自动抽取 | 待做 |
 | M5 | 写作台 UI（三栏布局 / 边写边告警） | 待做 |
 | M6 | 检索增强（FTS5 + 向量混合检索） | 待做 |
 
@@ -450,5 +519,8 @@ node scripts/e2e.mjs   # 端到端验证，20 段断言（需要先 build）
 > 连续创作 20 章，全程**不手工编辑** `bible/` 下的任何文件，
 > 且到第 20 章时系统未报出人物矛盾、境界矛盾或未登记专名。
 
-M2 已完成，**下一步是先真实写 5 章**，用实际手感决定 M3 的优先级 ——
-而不是照着计划往下堆功能。
+M2 已完成，且补上了「手写正文 / 手写摘要」这条不经过模型的通路 ——
+没有它，工具就只是个模型前端，而不是写作工具。
+
+**下一步是先真实写 5 章**，用实际手感决定 M3 的优先级，而不是照着计划
+往下堆功能。写这 5 章的时候，摘要要随手补上：它是长程记忆唯一的载体。
