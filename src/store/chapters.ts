@@ -76,3 +76,26 @@ export function parseChapterId(chapterId: string): string {
   }
   return chapterId;
 }
+
+/* ── 摘要 ─────────────────────────────────────── */
+
+/**
+ * 载入章节摘要：章节 id → 摘要文本。
+ *
+ * 摘要是长程记忆的载体。M2 只负责「有就读」，写入由 M4 的状态回写负责，
+ * 所以这里对缺失目录完全宽容。
+ */
+export async function loadSummaries(paths: BookPaths): Promise<Map<string, string>> {
+  const summaries = new Map<string, string>();
+  if (!existsSync(paths.summariesDir)) return summaries;
+
+  const entries = await readdir(paths.summariesDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const id = CHAPTER_FILE_RE.exec(entry.name)?.[1];
+    if (id === undefined) continue;
+    summaries.set(id, await readTextFile(join(paths.summariesDir, entry.name)));
+  }
+
+  return summaries;
+}
