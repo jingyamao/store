@@ -19,7 +19,7 @@ import {
 import { registerCollectionCommands } from "./commands/collections.js";
 import { runConfigInit, runConfigShow } from "./commands/config.js";
 import { runAgentWrite } from "./commands/agent.js";
-import { runMemoryRecord, runMemoryShow } from "./commands/memory.js";
+import { runMemoryEvaluate, runMemoryRecord, runMemoryShow } from "./commands/memory.js";
 import { runInit } from "./commands/init.js";
 import { runLintCommand } from "./commands/lint.js";
 import { runPlanList, runPlanNew, runPlanSet, runPlanShow } from "./commands/plan.js";
@@ -284,6 +284,11 @@ memory.command("show <chapter>")
   .description("查看这一章开始之前生效的已确认历史事实")
   .option("--entity <id>", "只显示某个实体")
   .action(guard(async (chapter: string, options: { entity?: string }) => runMemoryShow(chapter, options.entity, globals())));
+memory.command("evaluate <dataset>")
+  .description("用已核对的题目集评测章节历史状态；不调用模型")
+  .option("--output <path>", "把完整 JSON 报告保存到文件")
+  .option("--force", "允许覆盖已有报告文件")
+  .action(guard(async (dataset: string, options: { output?: string; force?: boolean }) => runMemoryEvaluate(dataset, options.output, options.force === true, globals())));
 
 interface RunsCliOptions {
   readonly limit?: number;

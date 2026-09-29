@@ -108,6 +108,10 @@ describe("章节历史记忆", () => {
     if (projected.bible.characters[0]?.relationships.length !== 0) throw new Error("后期关系状态泄漏");
     if (projected.bible.items[0]?.condition !== undefined) throw new Error("后期物品状态泄漏");
     if (projected.bible.threads[0]?.status !== "open") throw new Error("后期伏笔状态泄漏");
+    const nextChapter = projectBibleAsOf(bible, "ch-0004", [], [], [], 3);
+    if (nextChapter.bible.items[0]?.condition !== undefined || nextChapter.bible.threads[0]?.status !== "open") {
+      throw new Error("下一章读到缺少时间依据的预填状态");
+    }
   });
   it("补录事实必须有可靠依据，并在正文改动后失效", async () => {
     const ws = await workspace();

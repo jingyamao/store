@@ -94,6 +94,31 @@ novel memory show ch-0004 --entity char_linyuan
 
 `show ch-0004` 显示第 4 章开始前已确认的事实，不会包含第 4 章及之后的变化。人物关系是完整数组，可用 `--value-file relationships.json` 传入 JSON；同章同字段再次记录需加 `--force`。章节必须已有定稿正文；没有正文原句时用 `--author-note --evidence "作者说明"`。记录位于 `memory/ch-0001.yaml`；引用的正文后来改动后，该条事实会暂时失效并提示重新核对。回写早期章节时，无法确定时间的后期物品、伏笔及人物关系状态会暂时隐藏，可补录早期事实。
 
+### 评测历史记忆
+
+准备一份 `memory-eval.yaml`，每题描述某章开始前应成立的一个事实：
+
+```yaml
+version: 1
+cases:
+  - id: realm-before-breakthrough
+    chapter: ch-0004
+    collection: characters
+    entity: char_linyuan
+    field: state.realm
+    expected: 炼气
+    source: memory/ch-0001.yaml#characters:char_linyuan:state.realm
+  - id: location-unknown
+    chapter: ch-0004
+    collection: characters
+    entity: char_linyuan
+    field: state.location
+    expected: null
+    source: null
+```
+
+`source` 可省略；写上后会连出处一起检查。`expected: null` 表示该时点没有可信值。运行 `novel memory evaluate memory-eval.yaml --output memory-eval-report.json` 查看每题实际值、来源、告警和各字段通过率；有失败题目时退出码为 1。报告只能写在书籍目录外；已有报告需要 `--force` 才能覆盖。此评测不调用模型，建议在真实定稿的 30 章以上建立题目集并在每次修改记忆规则后重复运行。
+
 不想调用模型时，也能手工写摘要：
 
 ```powershell

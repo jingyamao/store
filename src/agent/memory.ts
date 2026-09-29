@@ -112,9 +112,14 @@ export function projectBibleAsOf(bible: Bible, chapterId: string, proposals: rea
       warnings.push(`${character.name} 的关系状态缺少逐章时间记录，已隐藏当前快照；可补录早期关系事实`);
     }
   }
+  let hiddenItemConditions = 0;
   for (const item of copy.items) {
-    if (future(item.firstAppearance, target) || backtracking) delete item.condition;
+    // 物品状态没有 asOf 字段；只有逐章确认的事实能证明它属于目标时点。
+    if (item.condition !== undefined) hiddenItemConditions += 1;
+    delete item.condition;
   }
+  if (hiddenItemConditions > 0) warnings.push(`${hiddenItemConditions} 件物品的当前状态缺少章节时点，已隐藏；可补录历史事实`);
+  let hiddenThreadHints = 0;
   for (const thread of copy.threads) {
     if (future(thread.resolvedAt, target) || ((thread.status === "resolved" || thread.status === "abandoned") && thread.resolvedAt === undefined)) {
       thread.status = "open";
@@ -124,12 +129,13 @@ export function projectBibleAsOf(bible: Bible, chapterId: string, proposals: rea
     } else if (thread.status !== "resolved") {
       delete thread.payoffNotes;
     }
-    if (backtracking) {
+    if (thread.status === "hinted") {
+      hiddenThreadHints += 1;
       thread.status = "open";
-      delete thread.resolvedAt;
       delete thread.payoffNotes;
     }
   }
+  if (hiddenThreadHints > 0) warnings.push(`${hiddenThreadHints} 条伏笔的提示状态缺少章节时点，已按未提示处理；可补录历史事实`);
   copy.timeline.events = copy.timeline.events.filter((event) => chapterNumber(event.chapter) < target);
   copy.settings = copy.settings.filter((setting) => !future(setting.establishedAt, target));
   const selected = selectHistoricalFacts(chapterId, proposals, manual);

@@ -1,6 +1,10 @@
-import { readTextFile } from "../../store/file-io.js";
+import { existsSync } from "node:fs";
+import { realpath } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { readTextFile, writeTextFile } from "../../store/file-io.js";
 import { booksRootOf, type GlobalOptions } from "../context.js";
 import { loadHistorySnapshot, recordManualFact } from "../../memory/history.js";
+import { evaluateMemory } from "../../memory/evaluate.js";
 import { projectBibleAsOf } from "../../agent/memory.js";
 import { chapterNumber } from "../../domain/ids.js";
 import { listChapterIds } from "../../store/chapters.js";
@@ -53,4 +57,35 @@ export async function runMemoryShow(chapter: string, entity: string | undefined,
   for (const warning of warnings) lines.push(`${ui.yellow("!")} ${warning}`);
   process.stdout.write(lines.join("\n") + "\n");
   return 0;
+}
+
+export async function runMemoryEvaluate(datasetPath: string, outputPath: string | undefined, force: boolean, global: GlobalOptions): Promise<number> {
+  const report = await evaluateMemory({ booksRoot: booksRootOf(global), bookId: global.book, datasetPath });
+  if (outputPath !== undefined) {
+    const output = resolve(outputPath);
+    const dataset = await realpath(datasetPath);
+    const book = await resolveBook(booksRootOf(global), global.book);
+    const bookRoot = await realpath(book.paths.root);
+    const canonicalOutput = existsSync(output)
+      ? await realpath(output)
+      : join(await realpath(dirname(output)).catch(() => dirname(output)), basename(output));
+    const withinBook = [relative(book.paths.root, output), relative(bookRoot, canonicalOutput)]
+      .some((part) => part === "" || (part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part)));
+    if (canonicalOutput === dataset || output === resolve(datasetPath)) throw new Error("报告路径不能与评测题目集相同");
+    if (withinBook) throw new Error("报告必须保存在书籍目录外，避免覆盖正文或资料卡");
+    if (existsSync(output) && !force) throw new Error(`报告文件已存在：${output}；如需覆盖，请加 --force`);
+    await writeTextFile(output, JSON.stringify(report, null, 2) + "\n");
+  }
+  if (global.json === true) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+  } else {
+    const lines = [`历史记忆评测：${report.bookId} · ${report.passed}/${report.total} 通过（${(report.accuracy * 100).toFixed(1)}%）`];
+    for (const result of report.results.filter((item) => !item.pass)) {
+      lines.push(`${ui.red("✗")} ${result.id} ${result.chapter} ${result.entity}.${result.field}`);
+      lines.push(`  预期 ${JSON.stringify(result.expected)}，实际 ${JSON.stringify(result.actual)}；来源 ${result.source ?? "无"}`);
+    }
+    if (outputPath !== undefined) lines.push(`报告：${outputPath}`);
+    process.stdout.write(lines.join("\n") + "\n");
+  }
+  return report.failed === 0 ? 0 : 1;
 }

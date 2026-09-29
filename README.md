@@ -111,6 +111,14 @@ novel memory show ch-0004 --entity char_linyuan
 
 记录保存在 `memory/ch-0001.yaml`。对应章节必须已有定稿正文；正文依据必须出现在该章定稿中。正文后来修改，旧依据会失效并告警。无法引用正文原句时可用 `--author-note` 标明为作者补录。人物关系数组可通过 `--value-file <JSON 文件>` 输入。回写早期章节时，缺少逐章记录的后期物品、伏笔及人物关系状态会暂时隐藏，需要补录早期事实。
 
+用核对过的章节题目集回归检查历史记忆：
+
+```bash
+novel memory evaluate memory-eval.yaml --output memory-eval-report.json
+```
+
+题目集格式见[用户指南](docs/user-guide.md)。评测只读本地书籍，不调用模型；若有题目未通过，命令返回退出码 1。真实 30 章题目集需要依据自己的定稿建立。
+
 ### 传统分步写作
 
 「人机协作」不是一句口号，它体现在这条命令的默认行为里：
