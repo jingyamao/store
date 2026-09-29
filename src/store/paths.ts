@@ -23,6 +23,7 @@ export interface BookPaths {
   readonly chaptersOutlineDir: string;
   readonly chaptersDir: string;
   readonly summariesDir: string;
+  readonly memoryDir: string;
   readonly runsDir: string;
   readonly indexPath: string;
 }
@@ -44,6 +45,7 @@ export function bookPathsFor(booksRoot: string, bookId: string): BookPaths {
     chaptersOutlineDir: join(root, "outline", "chapters"),
     chaptersDir: join(root, "chapters"),
     summariesDir: join(root, "summaries"),
+    memoryDir: join(root, "memory"),
     runsDir: join(root, "runs"),
     indexPath: join(root, "index.sqlite"),
   };

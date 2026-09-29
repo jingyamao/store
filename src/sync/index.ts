@@ -20,7 +20,7 @@ import { resolveBook, type BookPaths } from "../store/paths.js";
 import { deleteByPath, getByPath, setByPath } from "../util/dotted-path.js";
 import { withSyncLock } from "./lock.js";
 
-const fieldSchemas = {
+export const fieldSchemas = {
   "characters:state.realm": z.string().min(1),
   "characters:state.location": LocationIdSchema,
   "characters:state.injuries": z.array(z.string().min(1)),

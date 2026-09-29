@@ -19,6 +19,7 @@ import {
 import { registerCollectionCommands } from "./commands/collections.js";
 import { runConfigInit, runConfigShow } from "./commands/config.js";
 import { runAgentWrite } from "./commands/agent.js";
+import { runMemoryRecord, runMemoryShow } from "./commands/memory.js";
 import { runInit } from "./commands/init.js";
 import { runLintCommand } from "./commands/lint.js";
 import { runPlanList, runPlanNew, runPlanSet, runPlanShow } from "./commands/plan.js";
@@ -267,6 +268,22 @@ agent.command("write <chapter>")
   .action(guard(async (chapter: string, options: { dryRun?: boolean; words?: number }) =>
     runAgentWrite(chapter, options, globals()),
   ));
+
+const memory = program.command("memory").description("补录并查询有章节出处的长期历史事实");
+memory.command("record <chapter> <collection> <entity> <field> [value]")
+  .description("记录作者确认的历史事实；value 为 JSON 或普通文本")
+  .requiredOption("--evidence <text>", "定稿正文原句，或配合 --author-note 使用作者说明")
+  .option("--author-note", "依据为作者说明，不要求正文中出现相同文字")
+  .option("--value-file <path>", "从 JSON 文件读取数组或对象值")
+  .option("--force", "替换同章节、同实体、同字段的记录")
+  .action(guard(async (chapter: string, collection: string, entity: string, field: string, value: string | undefined,
+    options: { evidence: string; authorNote?: boolean; valueFile?: string; force?: boolean }) =>
+    runMemoryRecord(chapter, collection, entity, field, value, options, globals()),
+  ));
+memory.command("show <chapter>")
+  .description("查看这一章开始之前生效的已确认历史事实")
+  .option("--entity <id>", "只显示某个实体")
+  .action(guard(async (chapter: string, options: { entity?: string }) => runMemoryShow(chapter, options.entity, globals())));
 
 interface RunsCliOptions {
   readonly limit?: number;

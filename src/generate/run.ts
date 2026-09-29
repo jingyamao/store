@@ -671,10 +671,10 @@ export async function readRunDetails(paths: BookPaths, name: string): Promise<{ 
   const draftText = await readTextFileOr(join(dir, "draft.md"), "");
   const agentPlan = await readTextFileOr(join(dir, "agent-plan.md"), "");
   const memoryText = await readTextFileOr(join(dir, "agent-memory.json"), "");
-  const memory = memoryText === "" ? null : JSON.parse(memoryText) as { evidence?: Array<{ source: string }> };
+  const memory = memoryText === "" ? null : JSON.parse(memoryText) as { evidence?: Array<{ source: string }>; facts?: Array<{ source: string }> };
   return { record, openings, draft: draftText.trim() === "" ? null : draftText,
     agentPlan: agentPlan.trim() === "" ? null : agentPlan,
-    memorySources: memory?.evidence?.map((item) => item.source) ?? [] };
+    memorySources: [...(memory?.evidence?.map((item) => item.source) ?? []), ...(memory?.facts?.map((item) => item.source) ?? [])] };
 }
 
 /** 继续一条仅生成开篇的记录，使用其原始上下文和细纲快照。 */

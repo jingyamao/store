@@ -85,6 +85,15 @@ novel lint
 
 提案保存在 `chapters/ch-0001.meta.yaml`，列出状态旧值、新值和正文依据。`--accept` 只应用指定序号；`--summary` 单独确认章节摘要。提案不会自动改 Bible。正文在提案后发生修改时，应用会被拒绝，请用 `novel sync propose ch-0001 --force` 重新提取。若没有状态变化，可以只用 `--summary`。
 
+如果过去的状态或人物关系没有被自动提取，可由作者补录章节历史事实：
+
+```powershell
+novel memory record ch-0001 characters char_linyuan state.realm 炼气 --evidence "仍是炼气境"
+novel memory show ch-0004 --entity char_linyuan
+```
+
+`show ch-0004` 显示第 4 章开始前已确认的事实，不会包含第 4 章及之后的变化。人物关系是完整数组，可用 `--value-file relationships.json` 传入 JSON；同章同字段再次记录需加 `--force`。章节必须已有定稿正文；没有正文原句时用 `--author-note --evidence "作者说明"`。记录位于 `memory/ch-0001.yaml`；引用的正文后来改动后，该条事实会暂时失效并提示重新核对。回写早期章节时，无法确定时间的后期物品、伏笔及人物关系状态会暂时隐藏，可补录早期事实。
+
 不想调用模型时，也能手工写摘要：
 
 ```powershell

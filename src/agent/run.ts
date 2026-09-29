@@ -80,6 +80,7 @@ export async function runWritingAgent(options: AgentWriteOptions): Promise<Gener
   await writeTextFile(join(runDir, "agent-memory.json"), JSON.stringify({
     chapterId: options.chapterId,
     evidence: memory.evidence,
+    facts: memory.facts,
     warnings: memory.warnings,
   }, null, 2) + "\n");
   await saveCheckpoint();

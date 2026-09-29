@@ -317,6 +317,7 @@ describe("人工选择与采用已有初稿", () => {
     const target = join(ws.paths.chaptersDir, "ch-0004.md");
     await writeTextFile(target, "另一处刚写好的正文");
     const error = await captureError(() => applyExistingRun(ws.paths, name, false, emptyHash));
+    if (!(error instanceof Error)) throw new Error("应收到采用冲突错误");
     expect(error.message).toMatch("已被其他操作修改");
     expect(readFileSync(target, "utf8")).toBe("另一处刚写好的正文");
   });

@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
@@ -64,8 +65,8 @@ describe("Agent 记忆", () => {
     }]);
     const bible = await loadBible(ws.booksRoot, ws.bookId);
     const proposal = SyncProposalSchema.parse({
-      chapter: "ch-0005", sourceHash: "0".repeat(64), generatedAt: "2026-01-01", summary: "升境界",
-      changes: [{ collection: "characters", id: "char_lin", field: "state.realm", before: "炼气", after: "筑基", evidence: "境界突破" }],
+      chapter: "ch-0005", sourceHash: createHash("sha256").update("林渊终于得知青铜钥匙可以打开皇陵，升入筑基。").digest("hex"), generatedAt: "2026-01-01", summary: "升境界",
+      changes: [{ collection: "characters", id: "char_lin", field: "state.realm", before: "炼气", after: "筑基", evidence: "升入筑基" }],
       applied: [1], summaryApplied: false,
     });
     const reverted = projectBibleAsOf(bible, "ch-0004", [proposal]);

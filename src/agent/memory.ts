@@ -6,13 +6,13 @@ import type { ResolvedConfig } from "../config/index.js";
 import { chapterNumber } from "../domain/ids.js";
 import type { ChapterOutline } from "../domain/outline.js";
 import { assembleContextPack, type ContextPack } from "../generate/context-pack.js";
-import { loadBible, type Bible } from "../store/bible.js";
-import { loadChapters, loadSummaries } from "../store/chapters.js";
-import { readTextFileOr, readYamlValidated } from "../store/file-io.js";
+import { loadHistorySnapshot, selectHistoricalFacts, type HistoricalFact, type ManualFact } from "../memory/history.js";
+import type { Bible } from "../store/bible.js";
+import { latestChapterNumber, loadChapters, loadSummaries } from "../store/chapters.js";
+import { readTextFileOr } from "../store/file-io.js";
 import { readChapterOutline } from "../store/outlines.js";
 import { resolveBook } from "../store/paths.js";
-import { recoverAllPending, SyncProposalSchema, type SyncProposal } from "../sync/index.js";
-import { withSyncLock } from "../sync/lock.js";
+import type { SyncProposal } from "../sync/index.js";
 import { deleteByPath, setByPath } from "../util/dotted-path.js";
 
 export interface MemoryEvidence {
@@ -25,6 +25,7 @@ export interface MemoryEvidence {
 export interface AgentMemory {
   readonly pack: ContextPack;
   readonly evidence: readonly MemoryEvidence[];
+  readonly facts: readonly HistoricalFact[];
   readonly warnings: readonly string[];
 }
 
@@ -33,12 +34,17 @@ function future(id: string | undefined, target: number): boolean {
 }
 
 /** 从已确认的 sync 差量倒推早期状态；无可靠历史时隐藏后期动态状态。 */
-export function projectBibleAsOf(bible: Bible, chapterId: string, proposals: readonly SyncProposal[]): { bible: Bible; warnings: string[] } {
+export function projectBibleAsOf(bible: Bible, chapterId: string, proposals: readonly SyncProposal[], manual: readonly ManualFact[] = [], staleProposals: readonly SyncProposal[] = [], latestWrittenChapter = 0): { bible: Bible; warnings: string[]; facts: HistoricalFact[] } {
   const target = chapterNumber(chapterId);
+  const backtracking = latestWrittenChapter >= target;
   const copy = structuredClone(bible);
   const warnings: string[] = [];
   const undoneCharacters = new Set<string>();
   const restoredCharacterFields = new Map<string, Map<string, unknown>>();
+  const staleKeys = new Set(staleProposals.flatMap((proposal) => proposal.applied.flatMap((index) => {
+    const change = proposal.changes[index - 1];
+    return change === undefined ? [] : [`${change.collection}:${change.id}:${change.field}`];
+  })));
   const after = proposals
     .filter((proposal) => chapterNumber(proposal.chapter) >= target)
     .sort((a, b) => chapterNumber(b.chapter) - chapterNumber(a.chapter));
@@ -55,21 +61,43 @@ export function projectBibleAsOf(bible: Bible, chapterId: string, proposals: rea
       if (change.collection === "characters") {
         undoneCharacters.add(change.id);
         const fields = restoredCharacterFields.get(change.id) ?? new Map<string, unknown>();
-        fields.set(change.field, change.before);
+        if (!staleKeys.has(`${change.collection}:${change.id}:${change.field}`)) fields.set(change.field, change.before);
         restoredCharacterFields.set(change.id, fields);
       }
     }
   }
 
+  // 旧正文对应的同步结果不能作为历史证据；清除它影响过的当前快照字段。
+  for (const proposal of staleProposals) {
+    for (const index of proposal.applied) {
+      const change = proposal.changes[index - 1];
+      if (change === undefined) continue;
+      const entity = copy[change.collection].find((item) => item.id === change.id);
+      if (entity === undefined) continue;
+      deleteByPath(entity as unknown as Record<string, unknown>, change.field);
+      if (change.collection === "characters") {
+        delete (entity as Bible["characters"][number]).state.asOfChapter;
+      } else if (change.collection === "threads" && change.field === "status") {
+        (entity as Bible["threads"][number]).status = "open";
+      }
+      warnings.push(`${proposal.chapter} 的 ${change.collection}/${change.id}.${change.field} 来源正文已变化，历史状态暂不可用`);
+    }
+  }
+
   for (const character of copy.characters) {
     // 未留下 sync 差量的后期状态不能安全地当作早期状态使用。
-    if (future(character.state.asOfChapter, target)) {
+    const unanchoredState = character.state.asOfChapter === undefined && (
+      character.state.realm !== undefined || character.state.location !== undefined || character.state.diedAt !== undefined ||
+      character.state.alive === false || (character.state.injuries?.length ?? 0) > 0 || (character.state.possession?.length ?? 0) > 0 ||
+      (character.state.knownSecrets?.length ?? 0) > 0 || (character.state.goals?.length ?? 0) > 0
+    );
+    if (future(character.state.asOfChapter, target) || unanchoredState) {
       // 保留经差量明确回推的字段，其他后期字段没有可靠的时间来源。
       character.state = {} as typeof character.state;
       for (const [field, value] of restoredCharacterFields.get(character.id) ?? []) {
         if (value !== null && value !== undefined) setByPath(character as unknown as Record<string, unknown>, field, value);
       }
-      warnings.push(`${character.name} 的状态晚于 ${chapterId}；仅保留有历史差量可回推的字段`);
+      warnings.push(`${character.name} 的状态缺少可用的历史时点；仅保留有历史差量可回推的字段`);
     }
     if (undoneCharacters.has(character.id)) {
       const latest = proposals
@@ -79,9 +107,13 @@ export function projectBibleAsOf(bible: Bible, chapterId: string, proposals: rea
       else character.state.asOfChapter = latest.chapter;
     }
     character.relationships = character.relationships.filter((relation) => !future(relation.since, target));
+    if (backtracking && character.relationships.length > 0) {
+      character.relationships = [];
+      warnings.push(`${character.name} 的关系状态缺少逐章时间记录，已隐藏当前快照；可补录早期关系事实`);
+    }
   }
   for (const item of copy.items) {
-    if (future(item.firstAppearance, target)) delete item.condition;
+    if (future(item.firstAppearance, target) || backtracking) delete item.condition;
   }
   for (const thread of copy.threads) {
     if (future(thread.resolvedAt, target) || ((thread.status === "resolved" || thread.status === "abandoned") && thread.resolvedAt === undefined)) {
@@ -92,21 +124,29 @@ export function projectBibleAsOf(bible: Bible, chapterId: string, proposals: rea
     } else if (thread.status !== "resolved") {
       delete thread.payoffNotes;
     }
+    if (backtracking) {
+      thread.status = "open";
+      delete thread.resolvedAt;
+      delete thread.payoffNotes;
+    }
   }
   copy.timeline.events = copy.timeline.events.filter((event) => chapterNumber(event.chapter) < target);
   copy.settings = copy.settings.filter((setting) => !future(setting.establishedAt, target));
-  return { bible: copy, warnings };
-}
-
-async function approvedProposals(chaptersDir: string): Promise<SyncProposal[]> {
-  if (!existsSync(chaptersDir)) return [];
-  const files = (await readdir(chaptersDir)).filter((name) => /^ch-\d+\.meta\.yaml$/.test(name));
-  const result: SyncProposal[] = [];
-  for (const name of files) {
-    const proposal = await readYamlValidated(join(chaptersDir, name), SyncProposalSchema);
-    if (proposal.applied.length > 0) result.push(proposal);
+  const selected = selectHistoricalFacts(chapterId, proposals, manual);
+  warnings.push(...selected.warnings);
+  for (const fact of selected.facts) {
+    const entity = copy[fact.collection].find((entry) => entry.id === fact.id);
+    if (entity === undefined) continue;
+    const record = entity as unknown as Record<string, unknown>;
+    if (fact.value === null) deleteByPath(record, fact.field);
+    else setByPath(record, fact.field, fact.value);
+    if (fact.collection === "characters" && fact.field.startsWith("state.")) {
+      const character = entity as Bible["characters"][number];
+      const old = character.state.asOfChapter;
+      if (old === undefined || chapterNumber(old) < chapterNumber(fact.chapter)) character.state.asOfChapter = fact.chapter;
+    }
   }
-  return result;
+  return { bible: copy, warnings, facts: selected.facts };
 }
 
 function terms(outline: ChapterOutline, bible: Bible): string[] {
@@ -183,19 +223,13 @@ export async function prepareAgentMemory(options: {
   const outline = await readChapterOutline(paths, options.chapterId);
   if (outline === undefined) throw new Error(`${options.chapterId} 尚无细纲，请先运行 novel plan new ${options.chapterId}`);
   const [snapshot, chapters, summaries, styleText, masterOutlineText] = await Promise.all([
-    withSyncLock(paths, async () => {
-      await recoverAllPending(paths);
-      return {
-        bible: await loadBible(options.booksRoot, resolved.id),
-        proposals: await approvedProposals(paths.chaptersDir),
-      };
-    }),
+    loadHistorySnapshot(options.booksRoot, resolved.id),
     loadChapters(paths), loadSummaries(paths),
     readTextFileOr(paths.styleFile, ""), readTextFileOr(paths.masterOutlineFile, ""),
   ]);
   const originalBible = snapshot.bible;
   const proposals = snapshot.proposals;
-  const projected = projectBibleAsOf(originalBible, outline.chapter, proposals);
+  const projected = projectBibleAsOf(originalBible, outline.chapter, proposals, snapshot.manual, snapshot.staleProposals, latestChapterNumber(chapters));
   const evidence = retrievePastEvidence(outline, projected.bible, chapters, summaries, options.config.generation.recentChapters);
   const volumeOutlineText = outline.volume === undefined ? "" : await readTextFileOr(join(paths.volumesDir, `${outline.volume}.md`), "");
   const volumeNumber = outline.volume === undefined ? 0 : Number(outline.volume.slice(4));
@@ -209,6 +243,10 @@ export async function prepareAgentMemory(options: {
   const pack = assembleContextPack({
     bookId: resolved.id, outline, styleText, masterOutlineText, volumeOutlineText,
     previousVolumeSummaries, bible: projected.bible, chapters, summaries,
+    historicalFacts: projected.facts.map((fact) => ({
+      source: fact.source, collection: fact.collection, id: fact.id,
+      text: `【${fact.chapter} 已确认事实】${fact.id}.${fact.field} = ${JSON.stringify(fact.value)}；依据：${fact.evidence.slice(0, 160)}`,
+    })),
     retrievedMemories: evidence.map((entry, index) => ({
       source: `${entry.source}#memory-${index + 1}`, text: `【历史证据 ${entry.chapter}，来源 ${entry.source}】\n${entry.text}`, score: entry.score,
     })),
@@ -221,5 +259,6 @@ export async function prepareAgentMemory(options: {
     .map((entry, index) => ({ entry, packed: included.get(`${entry.source}#memory-${index + 1}`) }))
     .filter((row): row is { entry: MemoryEvidence; packed: string } => row.packed !== undefined)
     .map(({ entry, packed }) => ({ ...entry, text: packed }));
-  return { pack, evidence: usedEvidence, warnings: projected.warnings };
+  const usedFacts = projected.facts.filter((fact) => included.has(fact.source));
+  return { pack, evidence: usedEvidence, facts: usedFacts, warnings: [...snapshot.warnings, ...projected.warnings] };
 }

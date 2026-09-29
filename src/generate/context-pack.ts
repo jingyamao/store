@@ -113,6 +113,8 @@ export interface ContextSources {
   readonly summaries: ReadonlyMap<string, string>;
   /** 从更早的定稿正文或摘要按本章需求检索出的证据。 */
   readonly retrievedMemories?: readonly { readonly source: string; readonly text: string; readonly score: number }[] | undefined;
+  /** 经过章节时间点筛选的已确认结构化事实，带具体记录来源。 */
+  readonly historicalFacts?: readonly { readonly source: string; readonly text: string; readonly collection: "characters" | "items" | "threads"; readonly id: string }[] | undefined;
   /** 未回收伏笔的提醒阈值（章）。 */
   readonly threadExpiryChapters?: number | undefined;
 }
@@ -342,6 +344,13 @@ function entityItems(sources: ContextSources): PendingItem[] {
     });
   }
 
+  for (const fact of sources.historicalFacts ?? []) {
+    if ((fact.collection === "characters" && refs.characters.includes(fact.id)) ||
+        (fact.collection === "items" && refs.items.includes(fact.id))) {
+      items.push({ source: fact.source, text: fact.text, priority: 92 });
+    }
+  }
+
   return items;
 }
 
@@ -403,6 +412,12 @@ function threadItems(sources: ContextSources, expiry: number): PendingItem[] {
       text: `【已发生时间线 ${event.chapter}】${event.inWorldTime ?? ""} ${event.summary}`,
       priority: 65,
     });
+  }
+
+  for (const fact of sources.historicalFacts ?? []) {
+    if (fact.collection === "threads" && seen.has(fact.id)) {
+      items.push({ source: fact.source, text: fact.text, priority: 88 });
+    }
   }
 
   return items;
