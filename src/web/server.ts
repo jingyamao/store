@@ -11,6 +11,7 @@ import { reviewChapter } from "../review/index.js";
 import { rebuildSearchIndex, searchBook } from "../search/index.js";
 import { loadBible } from "../store/bible.js";
 import { parseChapterId, readChapterText, writeChapterText } from "../store/chapters.js";
+import { compareRevision, HistoryConflictError, listRevisions, restoreRevision, type HistoryKind } from "../store/history.js";
 import { readChapterOutline, writeChapterOutline } from "../store/outlines.js";
 import { resolveBook } from "../store/paths.js";
 import { loadProgress } from "../store/progress.js";
@@ -50,6 +51,10 @@ function chapterFrom(path: string, prefix: string): string | undefined {
   if (!path.startsWith(prefix)) return undefined;
   const id = path.slice(prefix.length);
   return id.includes("/") ? undefined : parseChapterId(id);
+}
+function historyKind(value: string | null): HistoryKind {
+  if (value === "text" || value === "outline") return value;
+  throw new Error("kind 只能是 text 或 outline");
 }
 const OutlinePatch = z.object({
   baseHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -115,14 +120,31 @@ export async function startWorkbench(options: WorkbenchOptions): Promise<{ serve
         const text = await readChapterText(paths, chapter) ?? "";
         const outline = await readChapterOutline(paths, chapter) ?? null;
         json(res, 200, { chapter, text, hash: hash(text), outline, outlineHash: hash(JSON.stringify(outline ?? scaffoldChapterOutline(chapter))) });
+      } else if (req.method === "GET" && /^\/api\/history\/ch-\d{4,}$/.test(route)) {
+        const chapter = parseChapterId(route.slice("/api/history/".length));
+        const kind = historyKind(url.searchParams.get("kind"));
+        json(res, 200, { chapter, kind, versions: await listRevisions(paths, chapter, kind) });
+      } else if (req.method === "GET" && /^\/api\/history\/ch-\d{4,}\/[^/]+$/.test(route)) {
+        const [, chapter = "", revision = ""] = /^\/api\/history\/(ch-\d{4,})\/([^/]+)$/.exec(route) ?? [];
+        const kind = historyKind(url.searchParams.get("kind"));
+        json(res, 200, await compareRevision(paths, parseChapterId(chapter), kind, revision));
+      } else if (req.method === "POST" && /^\/api\/history\/ch-\d{4,}\/[^/]+\/restore$/.test(route)) {
+        const [, chapter = "", revision = ""] = /^\/api\/history\/(ch-\d{4,})\/([^/]+)\/restore$/.exec(route) ?? [];
+        const input = await body(req);
+        const kind = historyKind(typeof input["kind"] === "string" ? input["kind"] : null);
+        if (typeof input["baseHash"] !== "string" || !/^[a-f0-9]{64}$/.test(input["baseHash"])) throw new Error("baseHash 必须是当前文件的 SHA-256");
+        const result = await withChapterLock(paths, () => restoreRevision(paths, parseChapterId(chapter), kind, revision, input["baseHash"] as string));
+        json(res, 200, result);
       } else if (req.method === "PATCH" && chapterFrom(route, "/api/outline/") !== undefined) {
         const chapter = chapterFrom(route, "/api/outline/") ?? "";
         const patch = OutlinePatch.parse(await body(req));
-        const existing = await readChapterOutline(paths, chapter) ?? scaffoldChapterOutline(chapter);
-        if (patch.baseHash !== hash(JSON.stringify(existing))) { json(res, 409, { error: "细纲已被其他操作修改，请重新打开章节后再保存" }); return; }
-        const outline = ChapterOutlineSchema.parse({ ...existing, ...patch, targetWords: patch.targetWords ?? undefined });
-        await writeChapterOutline(paths, outline);
-        json(res, 200, { outline, hash: hash(JSON.stringify(outline)) });
+        await withChapterLock(paths, async () => {
+          const existing = await readChapterOutline(paths, chapter) ?? scaffoldChapterOutline(chapter);
+          if (patch.baseHash !== hash(JSON.stringify(existing))) { json(res, 409, { error: "细纲已被其他操作修改，请重新打开章节后再保存" }); return; }
+          const outline = ChapterOutlineSchema.parse({ ...existing, ...patch, targetWords: patch.targetWords ?? undefined });
+          await writeChapterOutline(paths, outline);
+          json(res, 200, { outline, hash: hash(JSON.stringify(outline)) });
+        });
       } else if (req.method === "PUT" && chapterFrom(route, "/api/chapter/") !== undefined) {
         const chapter = chapterFrom(route, "/api/chapter/") ?? "";
         const input = await body(req);
@@ -154,7 +176,7 @@ export async function startWorkbench(options: WorkbenchOptions): Promise<{ serve
       } else json(res, 404, { error: "找不到页面或接口" });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      json(res, 400, { error: message });
+      json(res, error instanceof HistoryConflictError ? 409 : 400, { error: message });
     }
   });
   await new Promise<void>((resolve, reject) => {

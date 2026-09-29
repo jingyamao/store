@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { chapterNumber, compareChapterId } from "../domain/ids.js";
 import { readTextFile, writeTextFile } from "./file-io.js";
 import type { BookPaths } from "./paths.js";
+import { writeVersionedContent, type HistoryReason } from "./history.js";
 
 const CHAPTER_FILE_RE = /^(ch-\d{4,})\.md$/;
 
@@ -64,9 +65,10 @@ export async function writeChapterText(
   paths: BookPaths,
   chapterId: string,
   text: string,
+  reason: HistoryReason = "save",
 ): Promise<void> {
   const validated = parseChapterId(chapterId);
-  await writeTextFile(chapterPath(paths, validated), text);
+  await writeVersionedContent(paths, validated, "text", text, reason);
 }
 
 /** 校验章节 id 格式，返回规范化结果。 */

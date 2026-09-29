@@ -5,7 +5,7 @@ export const CLIENT = String.raw`
   const editor = $('text');
   const shell = $('appShell');
   const panel = $('panelContent');
-  const store = { book: null, chapters: [], id: null, outline: null, outlineHash: null, hash: null, saved: '', review: null, tab: 'plan', run: null, draft: null, outlineDrafts: {} };
+  const store = { book: null, chapters: [], id: null, outline: null, outlineHash: null, hash: null, saved: '', review: null, tab: 'plan', historyKind: 'text', run: null, draft: null, outlineDrafts: {} };
   let saveTimer = null;
   let savePromise = null;
   let toastTimer = null;
@@ -424,11 +424,67 @@ export const CLIENT = String.raw`
       }
     }); };
   }
+  function renderHistory() {
+    panel.append(node('p', 'panel-lead', '每次实际改写前都会保存旧版本。选择一个版本查看与当前内容的差异，再决定是否恢复。'));
+    if (!store.id) { panel.append(node('div', 'empty-panel', '先选择一个章节。')); return; }
+    const chapter = store.id;
+    const kind = store.historyKind;
+    const switcher = node('div', 'history-switch');
+    for (const [value, label] of [['text', '正文'], ['outline', '章节细纲']]) {
+      const button = node('button', 'button' + (value === kind ? ' button-primary' : ''), label);
+      button.type = 'button'; button.setAttribute('aria-pressed', String(value === kind));
+      button.onclick = () => { store.historyKind = value; renderPanel(); };
+      switcher.append(button);
+    }
+    panel.append(switcher);
+    const list = node('div', 'history-list', '正在读取版本…'); panel.append(list);
+    const preview = node('div', 'history-preview'); panel.append(preview);
+    (async () => {
+      await flushEditor();
+      const data = await api('/api/history/' + chapter + '?kind=' + kind);
+      if (store.id !== chapter || store.tab !== 'history' || store.historyKind !== kind) return;
+      list.replaceChildren();
+      const versions = data.versions.filter((entry) => entry.id !== 'current');
+      list.append(sectionTitle((kind === 'text' ? '正文' : '细纲') + '旧版本 · ' + versions.length));
+      if (!versions.length) list.append(node('div', 'empty-panel', '还没有旧版本。首次改写后会自动出现。'));
+      const labels = { save: '保存前', import: '导入前', adopt: '采用初稿前', restore: '恢复前' };
+      for (const revision of versions) {
+        const button = node('button', 'history-item'); button.type = 'button';
+        button.append(node('strong', '', new Date(revision.at).toLocaleString('zh-CN')));
+        button.append(node('small', '', (labels[revision.reason] || '改写前') + ' · ' + revision.hash.slice(0, 8)));
+        button.onclick = () => action(button, async () => {
+          const detail = await api('/api/history/' + chapter + '/' + encodeURIComponent(revision.id) + '?kind=' + kind);
+          if (store.id !== chapter || store.tab !== 'history' || store.historyKind !== kind) return;
+          preview.replaceChildren(sectionTitle('与当前版本的差异'));
+          const explanation = node('p', 'micro-copy', '− 旧版独有内容　＋ 当前版本新增内容'); preview.append(explanation);
+          const diff = node('pre', 'history-diff');
+          for (const line of detail.lines) {
+            const mark = line.kind === 'add' ? '+ ' : line.kind === 'remove' ? '− ' : '  ';
+            diff.append(node('span', 'diff-' + line.kind, mark + line.text));
+          }
+          preview.append(diff);
+          const restore = node('button', 'button button-primary', '恢复这个旧版本'); restore.type = 'button';
+          restore.onclick = () => action(restore, async () => {
+            const warning = kind === 'outline' && store.outlineDrafts[chapter] ? '未保存的细纲输入也会丢失。' : '';
+            if (!window.confirm('将这个旧版本恢复为当前' + (kind === 'text' ? '正文' : '细纲') + '？恢复前的当前内容也会保留在历史中。' + warning)) return;
+            await flushEditor();
+            await api('/api/history/' + chapter + '/' + encodeURIComponent(revision.id) + '/restore', 'POST', { kind, baseHash: detail.currentHash });
+            delete store.outlineDrafts[chapter];
+            await loadState(); await openChapter(chapter, true);
+            message('已恢复旧版本；恢复前的内容仍可再次找回');
+          });
+          preview.append(restore);
+        });
+        list.append(button);
+      }
+    })().catch((error) => { list.replaceChildren(node('div', 'issue warn', error.message || String(error))); });
+  }
   function renderPanel() {
     panel.replaceChildren();
     if (store.tab === 'plan') renderPlan();
     else if (store.tab === 'ai') renderAi();
-    else renderSearch();
+    else if (store.tab === 'search') renderSearch();
+    else renderHistory();
   }
   function showTab(tab) {
     if (shell.classList.contains('focus-mode')) {

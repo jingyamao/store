@@ -12,7 +12,8 @@ import {
   ChapterOutlineSchema,
   type ChapterOutline,
 } from "../domain/outline.js";
-import { readYamlValidated, validate, writeYamlFile } from "./file-io.js";
+import { dumpYaml, readYamlValidated, validate } from "./file-io.js";
+import { writeVersionedContent, type HistoryReason } from "./history.js";
 import type { BookPaths } from "./paths.js";
 
 const OUTLINE_FILE_RE = /^(ch-\d{4,})\.yaml$/;
@@ -40,9 +41,10 @@ export async function readChapterOutline(
 export async function writeChapterOutline(
   paths: BookPaths,
   outline: ChapterOutline,
+  reason: HistoryReason = "save",
 ): Promise<void> {
   const checked = validate(ChapterOutlineSchema, outline, `章节细纲 ${outline.chapter}`);
-  await writeYamlFile(chapterOutlinePath(paths, checked.chapter), checked, OUTLINE_HEADER);
+  await writeVersionedContent(paths, checked.chapter, "outline", dumpYaml(checked, OUTLINE_HEADER), reason);
 }
 
 /** 列出所有已写细纲的章节，按章节序升序。 */

@@ -173,6 +173,7 @@ export async function initBook(booksRoot: string, options: InitBookOptions): Pro
       paths.chaptersDir,
       paths.summariesDir,
       paths.memoryDir,
+      paths.historyDir,
       paths.runsDir,
     ].map((dir) => mkdir(dir, { recursive: true })),
   );

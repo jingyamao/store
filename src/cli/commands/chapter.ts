@@ -20,6 +20,7 @@ import {
   writeChapterText,
   writeSummary,
 } from "../../store/chapters.js";
+import { withChapterLock } from "../../sync/lock.js";
 import { readTextFile } from "../../store/file-io.js";
 import { readChapterOutline } from "../../store/outlines.js";
 import { resolveBook } from "../../store/paths.js";
@@ -152,24 +153,19 @@ export async function runChapterNew(
   const resolved = await resolveBook(booksRootOf(global), global.book);
   parseChapterId(chapterId);
 
-  const existing = await readChapterText(resolved.paths, chapterId);
-  if (existing !== undefined && existing.trim() !== "" && options.force !== true) {
-    throw new CliError(
-      [
-        `${chapterId} 的正文已存在：${chapterPath(resolved.paths, chapterId)}`,
-        "",
-        "直接编辑它，或加 --force 用空模板覆盖（会丢掉现有内容）。",
-      ].join("\n"),
-    );
-  }
-
   const outline = await readChapterOutline(resolved.paths, chapterId);
   const heading = outline?.title
     ? `# 第 ${chapterNumber(chapterId)} 章 ${outline.title}`
     : `# 第 ${chapterNumber(chapterId)} 章`;
   const text = `${heading}\n\n`;
 
-  await writeChapterText(resolved.paths, chapterId, text);
+  await withChapterLock(resolved.paths, async () => {
+    const existing = await readChapterText(resolved.paths, chapterId);
+    if (existing !== undefined && existing.trim() !== "" && options.force !== true) {
+      throw new CliError(`${chapterId} 的正文已存在；确认覆盖请加 --force`);
+    }
+    await writeChapterText(resolved.paths, chapterId, text, "import");
+  });
 
   if (global.json === true) {
     process.stdout.write(
@@ -237,23 +233,13 @@ export async function runChapterImport(
     throw new CliError(`${file === "-" ? "标准输入" : file} 是空的，没有可导入的内容。`);
   }
 
-  const existing = await readChapterText(resolved.paths, chapterId);
-  if (
-    existing !== undefined &&
-    existing.trim() !== "" &&
-    options.force !== true
-  ) {
-    throw new CliError(
-      [
-        `${chapterId} 已经有正文了，拒绝覆盖。`,
-        "",
-        `当前 ${fmt(countWords(existing))} 字，新内容 ${fmt(countWords(incoming))} 字。`,
-        "确认要替换就加 --force。",
-      ].join("\n"),
-    );
-  }
-
-  await writeChapterText(resolved.paths, chapterId, `${incoming}\n`);
+  await withChapterLock(resolved.paths, async () => {
+    const existing = await readChapterText(resolved.paths, chapterId);
+    if (existing !== undefined && existing.trim() !== "" && options.force !== true) {
+      throw new CliError(`${chapterId} 已经有正文了，拒绝覆盖；确认替换请加 --force`);
+    }
+    await writeChapterText(resolved.paths, chapterId, `${incoming}\n`, "import");
+  });
 
   if (global.json === true) {
     process.stdout.write(

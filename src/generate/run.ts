@@ -542,23 +542,24 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
     }
 
     const target = join(paths.chaptersDir, `${outline.chapter}.md`);
-    if (existsSync(target) && options.force !== true) {
-      const existing = (await readTextFileOr(target, "")).trim();
-      if (existing !== "") {
-        throw new Error(
-          [
-            `${outline.chapter}.md 已经有内容了，拒绝覆盖。`,
-            "",
-            `  目标文件：${target}`,
-            "",
-            "确认要覆盖请加 --force；只想看看生成结果的话，",
-            `它已经保存在 ${join(runDir, "draft.md")}。`,
-          ].join("\n"),
-        );
+    await withChapterLock(paths, async () => {
+      if (existsSync(target) && options.force !== true) {
+        const existing = (await readTextFileOr(target, "")).trim();
+        if (existing !== "") {
+          throw new Error(
+            [
+              `${outline.chapter}.md 已经有内容了，拒绝覆盖。`,
+              "",
+              `  目标文件：${target}`,
+              "",
+              "确认要覆盖请加 --force；只想看看生成结果的话，",
+              `它已经保存在 ${join(runDir, "draft.md")}。`,
+            ].join("\n"),
+          );
+        }
       }
-    }
-
-    await writeChapterText(paths, outline.chapter, draft);
+      await writeChapterText(paths, outline.chapter, draft, "adopt");
+    });
     outputFile = target;
     progress(`已写入 ${target}`);
   }
@@ -653,7 +654,7 @@ export async function applyExistingRun(
     if (!force && current.trim() !== "") {
       throw new Error(`${record.chapterId} 已有正文；确认覆盖请加 --force`);
     }
-    await writeChapterText(paths, record.chapterId, draft);
+    await writeChapterText(paths, record.chapterId, draft, "adopt");
   });
   await writeTextFile(recordFile, JSON.stringify({ ...record, applied: true, outputFile: target }, null, 2) + "\n");
   return target;

@@ -8,6 +8,7 @@ import { MockProvider } from "../llm/mock.js";
 import { writeAnyCollection } from "../store/bible.js";
 import { findCollection } from "../store/collections.js";
 import { writeTextFile } from "../store/file-io.js";
+import { listRevisions, readRevision } from "../store/history.js";
 import { scaffoldChapterOutline, writeChapterOutline } from "../store/outlines.js";
 import { captureError, expect, expectRejects } from "../testing/expect.js";
 import { createWorkspace, type TestWorkspace } from "../testing/workspace.js";
@@ -267,6 +268,10 @@ describe("--apply", () => {
     expect(readFileSync(join(ws.paths.chaptersDir, "ch-0004.md"), "utf8")).toMatch(
       "林渊走进山谷",
     );
+    const previous = (await listRevisions(ws.paths, "ch-0004", "text")).find((entry) => entry.reason === "adopt");
+    if (previous === undefined || await readRevision(ws.paths, "ch-0004", "text", previous.id) !== "我自己写的内容") {
+      throw new Error("覆盖初稿前没有保存作者正文");
+    }
   });
 
   it("与 --dry-run 同时使用会明确报错", async () => {

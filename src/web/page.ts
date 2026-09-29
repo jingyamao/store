@@ -69,6 +69,7 @@ export const PAGE = `<!doctype html>
           <button type="button" role="tab" data-tab="plan" aria-selected="true">章节计划</button>
           <button type="button" role="tab" data-tab="ai" aria-selected="false">AI 助手</button>
           <button type="button" role="tab" data-tab="search" aria-selected="false">资料检索</button>
+          <button type="button" role="tab" data-tab="history" aria-selected="false">版本历史</button>
         </div>
         <div id="panelContent" class="panel-content" role="tabpanel"></div>
       </aside>

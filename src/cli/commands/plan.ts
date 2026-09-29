@@ -19,6 +19,7 @@ import {
 } from "../../store/outlines.js";
 import { dumpYaml } from "../../store/file-io.js";
 import { resolveBook } from "../../store/paths.js";
+import { withChapterLock } from "../../sync/lock.js";
 import { getByPath, setByPath } from "../../util/dotted-path.js";
 import { booksRootOf, CliError, type GlobalOptions } from "../context.js";
 import { describeIssue, expectsArrayIssue, parseValueForSchema } from "../value-parsing.js";
@@ -122,20 +123,15 @@ export async function runPlanNew(
 ): Promise<number> {
   const resolved = await resolveBook(booksRootOf(global), global.book);
 
-  const existing = await readChapterOutline(resolved.paths, chapterId);
-  if (existing !== undefined && options.force !== true) {
-    throw new CliError(
-      [
-        `${chapterId} 的细纲已存在：${chapterOutlinePath(resolved.paths, chapterId)}`,
-        "",
-        "直接编辑它，或加 --force 重新生成骨架（会丢掉当前内容）。",
-      ].join("\n"),
-    );
-  }
-
   // 章节 id 的格式校验在 schema 里，构造骨架时就会挡住 ch-1 这种写法
   const outline = scaffoldChapterOutline(chapterId, options.title ?? "");
-  await writeChapterOutline(resolved.paths, outline);
+  await withChapterLock(resolved.paths, async () => {
+    const existing = await readChapterOutline(resolved.paths, chapterId);
+    if (existing !== undefined && options.force !== true) {
+      throw new CliError(`${chapterId} 的细纲已存在：${chapterOutlinePath(resolved.paths, chapterId)}；确认覆盖请加 --force`);
+    }
+    await writeChapterOutline(resolved.paths, outline, "import");
+  });
 
   if (global.json === true) {
     process.stdout.write(`${JSON.stringify(outline, null, 2)}\n`);
@@ -202,7 +198,11 @@ export async function runPlanSet(
     );
   }
 
-  await writeChapterOutline(paths, parsed.value);
+  await withChapterLock(paths, async () => {
+    const current = await readChapterOutline(paths, chapterId);
+    if (JSON.stringify(current) !== JSON.stringify(outline)) throw new CliError("细纲已被其他操作修改，请重新运行命令");
+    await writeChapterOutline(paths, parsed.value);
+  });
 
   if (global.json === true) {
     process.stdout.write(`${JSON.stringify(parsed.value, null, 2)}\n`);
