@@ -5,13 +5,21 @@
  * 「上次那版初稿去哪了」不该需要自己去翻目录。
  */
 
-import { listRuns } from "../../generate/run.js";
+import { applyExistingRun, listRuns } from "../../generate/run.js";
 import { resolveBook } from "../../store/paths.js";
 import { booksRootOf, type GlobalOptions } from "../context.js";
 import * as ui from "../ui.js";
 
 export interface RunsOptions {
   readonly limit?: number | undefined;
+}
+
+export async function runAdopt(name: string, force: boolean, global: GlobalOptions): Promise<number> {
+  const resolved = await resolveBook(booksRootOf(global), global.book);
+  const target = await applyExistingRun(resolved.paths, name, force);
+  if (global.json === true) process.stdout.write(`${JSON.stringify({ run: name, outputFile: target })}\n`);
+  else process.stdout.write(`${ui.green("✓")} 已采用初稿 → ${target}\n`);
+  return 0;
 }
 
 export async function runRuns(options: RunsOptions, global: GlobalOptions): Promise<number> {
@@ -37,7 +45,7 @@ export async function runRuns(options: RunsOptions, global: GlobalOptions): Prom
     run.runId,
     run.chapterId,
     formatTime(run.startedAt),
-    run.dryRun ? ui.dim("dry-run") : ui.cyan("已生成"),
+    run.dryRun ? ui.dim("dry-run") : run.hasDraft ? ui.cyan("有初稿") : ui.yellow("待选开篇"),
     run.applied ? ui.green("已落盘") : ui.dim("未落盘"),
     run.usedTokens === 0 ? ui.dim("—") : run.usedTokens.toLocaleString("en-US"),
     run.problems > 0 ? ui.yellow(`${run.problems} 处`) : ui.dim("—"),

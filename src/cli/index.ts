@@ -18,11 +18,17 @@ import {
 } from "./commands/chapter.js";
 import { registerCollectionCommands } from "./commands/collections.js";
 import { runConfigInit, runConfigShow } from "./commands/config.js";
+import { runAgentWrite } from "./commands/agent.js";
 import { runInit } from "./commands/init.js";
 import { runLintCommand } from "./commands/lint.js";
 import { runPlanList, runPlanNew, runPlanSet, runPlanShow } from "./commands/plan.js";
-import { runRuns } from "./commands/runs.js";
+import { runReview } from "./commands/review.js";
+import { runAsk, runIndexRebuild, runSearch } from "./commands/search.js";
+import { runServe } from "./commands/serve.js";
+import { runVolumeAdopt, runVolumePropose, runVolumeShow } from "./commands/volume.js";
+import { runAdopt, runRuns } from "./commands/runs.js";
 import { runStatus } from "./commands/status.js";
+import { runSyncApply, runSyncPropose, runSyncShow } from "./commands/sync.js";
 import { runWrite } from "./commands/write.js";
 import { fail, type GlobalOptions } from "./context.js";
 import { VERSION } from "./version.js";
@@ -213,6 +219,8 @@ interface WriteCliOptions {
   readonly words?: number;
   readonly apply?: boolean;
   readonly force?: boolean;
+  readonly openingsOnly?: boolean;
+  readonly fromRun?: string;
 }
 
 program
@@ -224,6 +232,8 @@ program
   .option("--words <n>", "目标字数，覆盖细纲与配置", (value) => Number.parseInt(value, 10))
   .option("--apply", "生成后写入 chapters/<章节>.md")
   .option("--force", "配合 --apply：目标已有内容时允许覆盖")
+  .option("--openings-only", "只生成开篇方案，先阅读再选择")
+  .option("--from-run <id>", "从已有开篇记录续写初稿，不重复生成开篇")
   .action(
     guard(async (chapter: string, options: WriteCliOptions) =>
       runWrite(
@@ -241,11 +251,22 @@ program
             : {}),
           ...(options.apply !== undefined ? { apply: options.apply } : {}),
           ...(options.force !== undefined ? { force: options.force } : {}),
+          ...(options.openingsOnly !== undefined ? { openingsOnly: options.openingsOnly } : {}),
+          ...(options.fromRun !== undefined ? { fromRun: options.fromRun } : {}),
         },
         globals(),
       ),
     ),
   );
+
+const agent = program.command("agent").description("长篇写作 Agent：按章节时间点检索多层记忆、规划场景并生成初稿");
+agent.command("write <chapter>")
+  .description("检索历史证据、规划本章、生成待审阅初稿")
+  .option("--dry-run", "只生成记忆快照，不调用模型")
+  .option("--words <n>", "目标字数", (value) => Number.parseInt(value, 10))
+  .action(guard(async (chapter: string, options: { dryRun?: boolean; words?: number }) =>
+    runAgentWrite(chapter, options, globals()),
+  ));
 
 interface RunsCliOptions {
   readonly limit?: number;
@@ -265,6 +286,14 @@ program
       ),
     ),
   );
+
+program
+  .command("adopt <run-id>")
+  .description("采用已有生成记录的初稿，不再次调用模型")
+  .option("-f, --force", "已有正文时覆盖")
+  .action(guard(async (runId: string, options: { force?: boolean }) =>
+    runAdopt(runId, options.force ?? false, globals()),
+  ));
 
 /* ── 配置 ─────────────────────────────────────── */
 
@@ -352,6 +381,53 @@ summary
 /* ── 集合 CRUD ────────────────────────────────── */
 
 registerCollectionCommands(program);
+
+program.command("review <chapter>")
+  .description("检查已写正文的 AI 味、文风和节奏；--ai 增加模型评审")
+  .option("--ai", "调用模型做节奏、情节评审")
+  .action(guard(async (chapter: string, options: { ai?: boolean }) =>
+    runReview(chapter, options.ai ?? false, globals()),
+  ));
+
+const index = program.command("index").description("可重建的小说全文检索索引");
+index.command("rebuild").description("从 YAML/Markdown 重建 SQLite FTS5 索引")
+  .action(guard(async () => runIndexRebuild(globals())));
+program.command("search <query>").description("搜索正文、摘要、细纲和 Bible")
+  .action(guard(async (query: string) => runSearch(query, globals())));
+program.command("ask <question>").description("检索资料后让模型回答，并标明资料来源")
+  .action(guard(async (question: string) => runAsk(question, globals())));
+program.command("serve").description("启动本地三栏写作台")
+  .option("-p, --port <number>", "监听端口，默认 4173", (value) => Number.parseInt(value, 10))
+  .action(guard(async (options: { port?: number }) => runServe(options.port ?? 4173, globals())));
+
+/* ── 定稿后的状态回写 ─────────────────────────── */
+const sync = program.command("sync").description("从定稿提取状态变化，人工确认后回写 Bible");
+sync.command("propose <chapter>")
+  .description("让模型从正文提取摘要和状态变化，生成待确认提案")
+  .option("-f, --force", "重新生成已有提案")
+  .action(guard(async (chapter: string, options: { force?: boolean }) =>
+    runSyncPropose(chapter, options.force ?? false, globals()),
+  ));
+sync.command("show <chapter>")
+  .description("查看状态变化的旧值、新值和正文依据")
+  .action(guard(async (chapter: string) => runSyncShow(chapter, globals())));
+sync.command("apply <chapter>")
+  .description("逐项接受状态变化；摘要需单独加 --summary")
+  .option("--accept <numbers>", "接受的序号，例如 1,3")
+  .option("--summary", "同时采用提案中的章节摘要")
+  .action(guard(async (chapter: string, options: { accept?: string; summary?: boolean }) =>
+    runSyncApply(chapter, options.accept, options.summary ?? false, globals()),
+  ));
+
+const volume = program.command("volume").description("从已确认的章节摘要生成卷摘要");
+volume.command("propose <volume>").description("生成卷摘要待确认提案")
+  .option("-f, --force", "重新生成提案")
+  .action(guard(async (id: string, options: { force?: boolean }) => runVolumePropose(id, options.force ?? false, globals())));
+volume.command("show <volume>").description("查看卷摘要提案")
+  .action(guard(async (id: string) => runVolumeShow(id, globals())));
+volume.command("adopt <volume>").description("采用已审阅的卷摘要")
+  .option("-f, --force", "已有卷摘要时覆盖")
+  .action(guard(async (id: string, options: { force?: boolean }) => runVolumeAdopt(id, options.force ?? false, globals())));
 
 /* ── 入口 ─────────────────────────────────────── */
 

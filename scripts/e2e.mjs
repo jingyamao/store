@@ -41,6 +41,7 @@ function novel(args, expectedExit = 0, options = {}) {
   const result = spawnSync(process.execPath, [CLI, "--dir", SCRATCH, ...args], {
     cwd: ROOT,
     encoding: "utf8",
+    env: { ...process.env, DEEPSEEK_API_KEY: "", NOVEL_LLM_API_KEY: "" },
   });
 
   if (options.echo !== false) {

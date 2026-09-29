@@ -14,19 +14,21 @@
  */
 
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { ResolvedConfig } from "../config/index.js";
 import { chapterNumber } from "../domain/ids.js";
-import type { ChapterOutline } from "../domain/outline.js";
+import { ChapterOutlineSchema, type ChapterOutline } from "../domain/outline.js";
 import { parseAiFlavorBlacklist } from "../lint/index.js";
 import { createProvider } from "../llm/index.js";
 import type { LlmMessage, LlmProvider } from "../llm/types.js";
 import { loadBible, type Bible } from "../store/bible.js";
-import { loadChapters, loadSummaries, writeChapterText } from "../store/chapters.js";
+import { loadChapters, loadSummaries, parseChapterId, writeChapterText } from "../store/chapters.js";
 import { readTextFileOr, writeTextFile } from "../store/file-io.js";
 import { chapterOutlinePath, readChapterOutline } from "../store/outlines.js";
 import { resolveBook, type BookPaths } from "../store/paths.js";
+import { withChapterLock } from "../sync/lock.js";
 import {
   assembleContextPack,
   renderContextPack,
@@ -39,7 +41,7 @@ import {
   buildSystemPrompt,
   parseOpenings,
 } from "./prompt.js";
-import { countWords } from "./tokens.js";
+import { countWords, estimateMessageTokens } from "./tokens.js";
 
 /* ── 记录类型 ─────────────────────────────────── */
 
@@ -83,7 +85,7 @@ export interface RunRecord {
   readonly openings: {
     readonly requested: number;
     readonly parsed: number;
-    readonly picked: number;
+    readonly picked: number | undefined;
   };
   readonly applied: boolean;
   readonly outputFile: string | undefined;
@@ -128,9 +130,22 @@ export interface GenerateOptions {
   readonly targetWords?: number | undefined;
   readonly apply?: boolean | undefined;
   readonly force?: boolean | undefined;
+  /** 只生成开篇，等待作者选定后再续写。 */
+  readonly openingsOnly?: boolean | undefined;
+  /** 从已有开篇记录续写，不再调用开篇模型。 */
+  readonly fromRun?: string | undefined;
   readonly onProgress?: ((message: string) => void) | undefined;
   /** 注入时钟，让 runs 目录名在测试里可预测。 */
   readonly now?: (() => Date) | undefined;
+  /** Agent 已构造的时间点记忆；常规 write 仍使用原有装配方式。 */
+  readonly contextPackOverride?: ContextPack | undefined;
+  /** Agent 的章节执行计划，随提示词留档。 */
+  readonly writingPlan?: string | undefined;
+  readonly extraWarnings?: readonly string[] | undefined;
+  /** Agent 已预留并写入规划检查点的运行目录名。 */
+  readonly runDirName?: string | undefined;
+  /** Agent 的阶段检查点：模型返回后立即持久化用量。 */
+  readonly onStageComplete?: ((stage: RunStage) => Promise<void>) | undefined;
 }
 
 /* ── 工具 ─────────────────────────────────────── */
@@ -146,13 +161,20 @@ function formatRunId(date: Date): string {
   );
 }
 
-async function uniqueRunDir(runsDir: string, base: string): Promise<string> {
+export async function allocateRunDirectory(paths: BookPaths, chapterId: string, date: Date): Promise<{ runId: string; runDir: string; name: string }> {
+  const runId = formatRunId(date);
+  await mkdir(paths.runsDir, { recursive: true });
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const name = attempt === 0 ? base : `${base}-${attempt + 1}`;
-    const candidate = join(runsDir, name);
-    if (!existsSync(candidate)) return candidate;
+    const name = `${runId}-${chapterId}${attempt === 0 ? "" : `-${attempt + 1}`}`;
+    const runDir = join(paths.runsDir, name);
+    try {
+      await mkdir(runDir);
+      return { runId, runDir, name };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
   }
-  throw new Error(`无法为本次生成分配目录：${base}-* 全部被占用`);
+  throw new Error(`无法为本次生成分配目录：${runId}-${chapterId}-* 全部被占用`);
 }
 
 function renderMessages(messages: readonly LlmMessage[]): string {
@@ -289,6 +311,14 @@ async function loadSources(
   const summaries = await loadSummaries(paths);
   const styleText = await readTextFileOr(paths.styleFile, "");
   const masterOutlineText = await readTextFileOr(paths.masterOutlineFile, "");
+  const volumeOutlineText = outline.volume === undefined ? "" : await readTextFileOr(join(paths.volumesDir, `${outline.volume}.md`), "");
+  const volumeNumber = outline.volume === undefined ? 0 : Number(outline.volume.slice(4));
+  const previousVolumeSummaries = volumeNumber === 0 || !existsSync(paths.summariesDir) ? [] : await Promise.all(
+    (await readdir(paths.summariesDir))
+      .filter((name) => /^vol-\d{2,}\.md$/.test(name) && Number(name.slice(4, -3)) < volumeNumber)
+      .sort((a, b) => Number(b.slice(4, -3)) - Number(a.slice(4, -3)))
+      .map(async (name) => ({ id: name.slice(0, -3), text: await readTextFileOr(join(paths.summariesDir, name), "") })),
+  );
 
   const contextPack = assembleContextPack(
     {
@@ -296,6 +326,8 @@ async function loadSources(
       outline,
       styleText,
       masterOutlineText,
+      volumeOutlineText,
+      previousVolumeSummaries,
       bible,
       chapters,
       summaries,
@@ -322,9 +354,18 @@ async function loadSources(
 /* ── 主流程 ───────────────────────────────────── */
 
 export async function generateChapter(options: GenerateOptions): Promise<GenerateResult> {
+  if (options.fromRun !== undefined) {
+    return continueFromOpenings(options);
+  }
+  if (options.openingsOnly === true && options.apply === true) {
+    throw new Error("--openings-only 不能与 --apply 同时使用");
+  }
   const clock = options.now ?? (() => new Date());
   const dryRun = options.dryRun === true;
-  const targetWords = options.targetWords ?? options.config.generation.defaultTargetWords;
+  const planned = options.targetWords === undefined
+    ? await resolveBook(options.booksRoot, options.bookId).then((book) => readChapterOutline(book.paths, options.chapterId))
+    : undefined;
+  const targetWords = options.targetWords ?? planned?.targetWords ?? options.config.generation.defaultTargetWords;
   const openingsCount = options.openings ?? options.config.generation.openings;
   const pick = options.pick ?? 1;
 
@@ -340,19 +381,30 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
     options.config,
     targetWords,
   );
-  const { paths, outline, contextPack } = sources;
+  const { paths, outline } = sources;
+  const contextPack = options.contextPackOverride ?? sources.contextPack;
+  if (contextPack.bookId !== sources.bible.bookId || contextPack.chapterId !== outline.chapter) {
+    throw new Error("Agent 记忆与当前书籍或章节不符");
+  }
+  const contextText = renderContextPack(contextPack) +
+    (options.writingPlan === undefined ? "" : `\n\n【本章执行计划】\n${options.writingPlan}`);
 
   progress(
     `上下文已组装：${contextPack.usedTokens}/${contextPack.budgetTokens} token，` +
       `共 ${contextPack.layers.reduce((sum, layer) => sum + layer.items.length, 0)} 条`,
   );
 
-  const runId = formatRunId(clock());
-  await mkdir(paths.runsDir, { recursive: true });
-  const runDir = await uniqueRunDir(paths.runsDir, `${runId}-${outline.chapter}`);
+  const allocated = options.runDirName === undefined
+    ? await allocateRunDirectory(paths, outline.chapter, clock())
+    : (() => {
+        const match = /^[0-9]{8}-[0-9]{6}-(ch-[0-9]{4,})(?:-[0-9]+)?$/.exec(options.runDirName);
+        if (match?.[1] !== outline.chapter) throw new Error("非法 Agent 运行目录名");
+        return { runId: options.runDirName.slice(0, 15), runDir: join(paths.runsDir, options.runDirName), name: options.runDirName };
+      })();
+  const { runId, runDir } = allocated;
 
   const stages: RunStage[] = [];
-  const warnings = [...contextPack.warnings];
+  const warnings = [...contextPack.warnings, ...(options.extraWarnings ?? [])];
   let promptTokens = 0;
   let completionTokens = 0;
 
@@ -377,6 +429,7 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
     join(runDir, "context.json"),
     JSON.stringify(contextPack, null, 2) + "\n",
   );
+  await writeTextFile(join(runDir, "outline.json"), JSON.stringify(outline, null, 2) + "\n");
 
   let openings: string[] = [];
   let pickedOpening: string | undefined;
@@ -386,12 +439,15 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
   if (!dryRun && provider !== undefined) {
     const openingsPrompt = buildOpeningsPrompt({
       outline,
-      contextText: renderContextPack(contextPack),
+      contextText,
       targetWords,
       povLabel,
       count: openingsCount,
     });
     const messages = buildMessages(systemPrompt, openingsPrompt);
+    if (options.contextPackOverride !== undefined && estimateMessageTokens(messages) + contextPack.reserveForOutput > options.config.budget.contextWindow) {
+      throw new Error("Agent 开篇提示词超过配置的上下文窗口；请缩短细纲或调大 contextWindow");
+    }
 
     await writeTextFile(join(runDir, "prompt-openings.txt"), renderMessages(messages) + "\n");
 
@@ -401,7 +457,7 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
     progress(`正在生成 ${openingsCount} 个开篇方案…`);
     const result = await provider.complete(messages);
 
-    stages.push({
+    const openingsStage: RunStage = {
       name: "openings",
       label: "开篇方案",
       startedAt: stageStart,
@@ -410,10 +466,12 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
       model: result.model,
       promptTokens: result.usage?.promptTokens,
       completionTokens: result.usage?.completionTokens,
-    });
+    };
+    stages.push(openingsStage);
 
     promptTokens += result.usage?.promptTokens ?? 0;
     completionTokens += result.usage?.completionTokens ?? 0;
+    await options.onStageComplete?.(openingsStage);
 
     openings = parseOpenings(result.text, openingsCount);
     if (openings.length === 0) {
@@ -428,22 +486,25 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
     );
 
     const chosen = openings[pick - 1] ?? openings[0];
-    pickedOpening = chosen;
+    pickedOpening = options.openingsOnly === true ? undefined : chosen;
     if (chosen === undefined) {
       warnings.push("没有可用的开篇方案，改为直接生成全章");
     }
   }
 
   /* 阶段三：全章初稿 */
-  if (!dryRun && provider !== undefined) {
+  if (!dryRun && provider !== undefined && options.openingsOnly !== true) {
     const draftPrompt = buildDraftPrompt({
       outline,
-      contextText: renderContextPack(contextPack),
+      contextText,
       targetWords,
       povLabel,
       chosenOpening: pickedOpening,
     });
     const messages = buildMessages(systemPrompt, draftPrompt);
+    if (options.contextPackOverride !== undefined && estimateMessageTokens(messages) + contextPack.reserveForOutput > options.config.budget.contextWindow) {
+      throw new Error("Agent 初稿提示词超过配置的上下文窗口；请缩短细纲或调大 contextWindow");
+    }
 
     await writeTextFile(join(runDir, "prompt.txt"), renderMessages(messages) + "\n");
 
@@ -453,7 +514,7 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
     progress(`正在生成初稿（目标 ${targetWords} 字）…`);
     const result = await provider.complete(messages);
 
-    stages.push({
+    const draftStage: RunStage = {
       name: "draft",
       label: "全章初稿",
       startedAt: stageStart,
@@ -462,10 +523,12 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
       model: result.model,
       promptTokens: result.usage?.promptTokens,
       completionTokens: result.usage?.completionTokens,
-    });
+    };
+    stages.push(draftStage);
 
     promptTokens += result.usage?.promptTokens ?? 0;
     completionTokens += result.usage?.completionTokens ?? 0;
+    await options.onStageComplete?.(draftStage);
 
     draft = result.text.trim();
     await writeTextFile(join(runDir, "draft.md"), draft + "\n");
@@ -503,7 +566,7 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
   /* 记录 */
   const finishedAt = nowIso(clock);
   const draftCheck =
-    draft !== undefined
+    draft !== undefined && options.config.generation.lintDraft
       ? checkDraft(draft, {
           targetWords,
           blacklist: sources.blacklist,
@@ -525,7 +588,7 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
     openings: {
       requested: dryRun ? 0 : openingsCount,
       parsed: openings.length,
-      picked: pick,
+      picked: options.openingsOnly === true || dryRun ? undefined : pick,
     },
     applied: outputFile !== undefined,
     outputFile,
@@ -556,6 +619,123 @@ export async function generateChapter(options: GenerateOptions): Promise<Generat
   };
 }
 
+function runDirectory(paths: BookPaths, name: string): string {
+  if (!/^[0-9]{8}-[0-9]{6}-ch-[0-9]{4,}(?:-[0-9]+)?$/.test(name)) {
+    throw new Error(`非法生成记录 id：${name}`);
+  }
+  return join(paths.runsDir, name);
+}
+
+/** 将作者已审阅的 draft.md 原样采用；不会再次调用模型。 */
+export async function applyExistingRun(
+  paths: BookPaths,
+  name: string,
+  force = false,
+  expectedHash?: string,
+): Promise<string> {
+  const dir = runDirectory(paths, name);
+  const recordFile = join(dir, "run.json");
+  if (!existsSync(recordFile)) throw new Error(`找不到生成记录：${name}`);
+  const record = JSON.parse(await readTextFileOr(recordFile, "{}")) as RunRecord;
+  if (record.bookId !== paths.root.split(/[\\/]/).at(-1)) {
+    throw new Error(`生成记录 ${name} 不属于当前书籍`);
+  }
+  const draftFile = join(dir, "draft.md");
+  if (!existsSync(draftFile)) throw new Error(`生成记录 ${name} 还没有初稿`);
+  const draft = await readTextFileOr(draftFile, "");
+  if (draft.trim() === "") throw new Error(`生成记录 ${name} 的初稿为空`);
+  const target = join(paths.chaptersDir, `${parseChapterId(record.chapterId)}.md`);
+  await withChapterLock(paths, async () => {
+    const current = await readTextFileOr(target, "");
+    if (expectedHash !== undefined && createHash("sha256").update(current).digest("hex") !== expectedHash) {
+      throw new Error(`${record.chapterId} 的正文已被其他操作修改，请重新打开章节后再采用`);
+    }
+    if (!force && current.trim() !== "") {
+      throw new Error(`${record.chapterId} 已有正文；确认覆盖请加 --force`);
+    }
+    await writeChapterText(paths, record.chapterId, draft);
+  });
+  await writeTextFile(recordFile, JSON.stringify({ ...record, applied: true, outputFile: target }, null, 2) + "\n");
+  return target;
+}
+
+/** 读取已保存的开篇和初稿，供写作台在刷新后继续审阅。 */
+export async function readRunDetails(paths: BookPaths, name: string): Promise<{ record: RunRecord; openings: string[]; draft: string | null; agentPlan: string | null; memorySources: string[] }> {
+  const dir = runDirectory(paths, name);
+  const recordFile = join(dir, "run.json");
+  if (!existsSync(recordFile)) throw new Error(`找不到生成记录：${name}`);
+  const record = JSON.parse(await readTextFileOr(recordFile, "{}")) as RunRecord;
+  if (record.bookId !== paths.root.split(/[\\/]/).at(-1)) throw new Error(`生成记录 ${name} 不属于当前书籍`);
+  const openingsText = await readTextFileOr(join(dir, "openings.md"), "");
+  const openings = openingsText.split(/^## 方案 \d+\s*$/m).map((part) => part.trim()).filter(Boolean);
+  const draftText = await readTextFileOr(join(dir, "draft.md"), "");
+  const agentPlan = await readTextFileOr(join(dir, "agent-plan.md"), "");
+  const memoryText = await readTextFileOr(join(dir, "agent-memory.json"), "");
+  const memory = memoryText === "" ? null : JSON.parse(memoryText) as { evidence?: Array<{ source: string }> };
+  return { record, openings, draft: draftText.trim() === "" ? null : draftText,
+    agentPlan: agentPlan.trim() === "" ? null : agentPlan,
+    memorySources: memory?.evidence?.map((item) => item.source) ?? [] };
+}
+
+/** 继续一条仅生成开篇的记录，使用其原始上下文和细纲快照。 */
+async function continueFromOpenings(options: GenerateOptions): Promise<GenerateResult> {
+  if (options.apply === true || options.dryRun === true || options.openingsOnly === true) {
+    throw new Error("--from-run 只能用于续写初稿；采用已有稿请运行 novel adopt");
+  }
+  const resolved = await resolveBook(options.booksRoot, options.bookId);
+  const paths = resolved.paths;
+  const dir = runDirectory(paths, options.fromRun ?? "");
+  const recordFile = join(dir, "run.json");
+  if (!existsSync(recordFile)) throw new Error(`找不到生成记录：${options.fromRun}`);
+  const old = JSON.parse(await readTextFileOr(recordFile, "{}")) as RunRecord;
+  if (old.bookId !== resolved.id || old.chapterId !== options.chapterId) {
+    throw new Error("生成记录与当前书籍或章节不符");
+  }
+  if (old.stages.some((stage) => stage.name === "draft")) {
+    throw new Error("这条记录已有初稿；请使用 novel adopt 采用它");
+  }
+  const pack = JSON.parse(await readTextFileOr(join(dir, "context.json"), "{}")) as ContextPack;
+  const outline = ChapterOutlineSchema.parse(JSON.parse(await readTextFileOr(join(dir, "outline.json"), "{}")) as unknown);
+  const openingsText = await readTextFileOr(join(dir, "openings.md"), "");
+  const openings = openingsText.split(/^## 方案 \d+\s*$/m).map((part) => part.trim()).filter(Boolean);
+  const pick = options.pick ?? 1;
+  if (!Number.isInteger(pick) || pick < 1 || pick > openings.length) {
+    throw new Error(`请选择 1 到 ${openings.length} 之间的开篇方案`);
+  }
+  const bible = await loadBible(options.booksRoot, resolved.id);
+  const styleText = await readTextFileOr(paths.styleFile, "");
+  const systemPrompt = buildSystemPrompt({ blacklist: parseAiFlavorBlacklist(styleText), pov: bible.book.pov });
+  const povLabel = outline.povCharacter === undefined
+    ? undefined
+    : (bible.characters.find((c) => c.id === outline.povCharacter)?.name ?? outline.povCharacter);
+  const chosenOpening = openings[pick - 1] ?? "";
+  const prompt = buildDraftPrompt({ outline, contextText: renderContextPack(pack), targetWords: old.targetWords, povLabel, chosenOpening });
+  const messages = buildMessages(systemPrompt, prompt);
+  if (estimateMessageTokens(messages) + pack.reserveForOutput > options.config.budget.contextWindow) {
+    throw new Error("续写提示词超过配置的上下文窗口；请缩短开篇或调大 contextWindow");
+  }
+  await writeTextFile(join(dir, "prompt.txt"), renderMessages(messages) + "\n");
+  const provider = options.provider ?? createProvider(options.config);
+  const startedAt = new Date().toISOString();
+  const result = await provider.complete(messages);
+  const draft = result.text.trim();
+  await writeTextFile(join(dir, "draft.md"), draft + "\n");
+  const finishedAt = new Date().toISOString();
+  const updated: RunRecord = {
+    ...old,
+    finishedAt,
+    openings: { ...old.openings, picked: pick },
+    model: result.model,
+    usage: { promptTokens: old.usage.promptTokens + (result.usage?.promptTokens ?? 0), completionTokens: old.usage.completionTokens + (result.usage?.completionTokens ?? 0) },
+    stages: [...old.stages, { name: "draft", label: "全章初稿", startedAt, finishedAt, durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(), model: result.model, promptTokens: result.usage?.promptTokens, completionTokens: result.usage?.completionTokens }],
+    draftCheck: options.config.generation.lintDraft
+      ? checkDraft(draft, { targetWords: old.targetWords, blacklist: parseAiFlavorBlacklist(styleText), castNames: outline.cast.map((id) => bible.characters.find((c) => c.id === id)?.name).filter((name): name is string => name !== undefined) })
+      : [],
+  };
+  await writeTextFile(recordFile, JSON.stringify(updated, null, 2) + "\n");
+  return { runId: old.runId, runDir: dir, record: updated, contextPack: pack, openings, pickedOpening: chosenOpening, draft, outputFile: undefined };
+}
+
 /* ── 列出历史记录 ─────────────────────────────── */
 
 export interface RunSummary {
@@ -564,6 +744,7 @@ export interface RunSummary {
   readonly startedAt: string;
   readonly dryRun: boolean;
   readonly applied: boolean;
+  readonly hasDraft: boolean;
   readonly usedTokens: number;
   /** 初稿体检里 error + warn 的数量，用于一眼看出哪次生成有问题。 */
   readonly problems: number;
@@ -588,6 +769,7 @@ export async function listRuns(paths: BookPaths): Promise<RunSummary[]> {
         startedAt: record.startedAt ?? "",
         dryRun: record.dryRun === true,
         applied: record.applied === true,
+        hasDraft: record.stages?.some((stage) => stage.name === "draft") === true,
         usedTokens: record.context?.usedTokens ?? 0,
         problems: (record.draftCheck ?? []).filter((finding) => finding.level !== "info").length,
       });

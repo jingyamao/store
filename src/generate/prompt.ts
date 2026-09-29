@@ -126,7 +126,7 @@ export function buildDraftPrompt(input: DraftPromptInput): string {
   lines.push(
     "---",
     "",
-    "以下是作者提供的全部设定与背景资料。这些是权威事实，严格遵循：",
+    "以下是作者提供的设定、历史资料与故事规划。总纲和卷纲是未来方向，不代表本章已发生；已定稿正文和已确认状态才是截至本章的事实：",
     "",
     input.contextText,
     "",

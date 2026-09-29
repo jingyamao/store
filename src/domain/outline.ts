@@ -16,6 +16,8 @@ import {
 
 export const ChapterOutlineSchema = z.object({
   chapter: ChapterIdSchema,
+  /** 所属卷；用于卷纲、卷摘要的自动选择。 */
+  volume: z.string().regex(/^vol-\d{2,}$/).optional(),
 
   /** 本章标题。可留空，生成时由模型拟。 */
   title: z.string().default(""),

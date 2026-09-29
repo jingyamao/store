@@ -106,10 +106,13 @@ export interface ContextSources {
   readonly styleText: string;
   readonly masterOutlineText: string;
   readonly volumeOutlineText?: string | undefined;
+  readonly previousVolumeSummaries?: readonly { readonly id: string; readonly text: string }[] | undefined;
   readonly bible: Bible;
   readonly chapters: ReadonlyMap<string, string>;
   /** 章节 id → 摘要。M4 之后才会有内容。 */
   readonly summaries: ReadonlyMap<string, string>;
+  /** 从更早的定稿正文或摘要按本章需求检索出的证据。 */
+  readonly retrievedMemories?: readonly { readonly source: string; readonly text: string; readonly score: number }[] | undefined;
   /** 未回收伏笔的提醒阈值（章）。 */
   readonly threadExpiryChapters?: number | undefined;
 }
@@ -225,7 +228,7 @@ function referencedIds(sources: ContextSources): {
     // 否则模型会写出「人在落霞谷却握着留在青云宗的刀」这类矛盾
     const location = character.state.location;
     if (location !== undefined && location !== "") locations.add(location);
-    for (const item of character.state.possession) items.add(item);
+    for (const item of character.state.possession ?? []) items.add(item);
   }
 
   return {
@@ -270,12 +273,15 @@ function globalItems(sources: ContextSources): PendingItem[] {
 
   const master = sources.masterOutlineText.trim();
   if (master !== "") {
-    items.push({ source: "outline/master.md", text: master, priority: PRIORITY.masterOutline });
+    items.push({ source: "outline/master.md", text: `【作者全书规划：未来情节不代表本章已发生事实】\n${master}`, priority: PRIORITY.masterOutline });
   }
 
   const volume = sources.volumeOutlineText?.trim() ?? "";
   if (volume !== "") {
-    items.push({ source: "outline/volumes", text: volume, priority: PRIORITY.volumeOutline });
+    items.push({ source: "outline/volumes", text: `【作者本卷规划：未来情节不代表本章已发生事实】\n${volume}`, priority: PRIORITY.volumeOutline });
+  }
+  for (const [index, summary] of (sources.previousVolumeSummaries ?? []).entries()) {
+    if (summary.text.trim() !== "") items.push({ source: `summaries/${summary.id}.md`, text: summary.text.trim(), priority: 84 - index });
   }
 
   const powerSystem = renderEntity(sources.bible.powerSystem).trim();
@@ -368,7 +374,10 @@ function threadItems(sources: ContextSources, expiry: number): PendingItem[] {
   // 其余未回收的伏笔也带上 —— 这是「伏笔不被遗忘」的主要保障。
   // 埋得越久优先级越高，因为越久越容易被读者判定为「作者忘了」。
   const ambient = sources.bible.threads
-    .filter((thread) => thread.status === "open" || thread.status === "hinted")
+    .filter((thread) =>
+      (thread.status === "open" || thread.status === "hinted") &&
+      (thread.plantedAt === undefined || chapterNumber(thread.plantedAt) < current),
+    )
     .map((thread) => {
       const plantedAt =
         thread.plantedAt !== undefined ? chapterNumber(thread.plantedAt) : current;
@@ -384,6 +393,16 @@ function threadItems(sources: ContextSources, expiry: number): PendingItem[] {
       PRIORITY.ambientThreadBase + Math.min(12, age),
       `【未回收，已埋 ${age} 章${overdue}】`,
     );
+  }
+
+  // 时间线只记录已发生的事件；写回早期章节时不能看到后续剧情。
+  for (const event of sources.bible.timeline.events) {
+    if (chapterNumber(event.chapter) >= current) continue;
+    items.push({
+      source: `bible/timeline.yaml#${event.id}`,
+      text: `【已发生时间线 ${event.chapter}】${event.inWorldTime ?? ""} ${event.summary}`,
+      priority: 65,
+    });
   }
 
   return items;
@@ -410,7 +429,13 @@ function summaryItems(sources: ContextSources, generation: GenerationConfig): Pe
   // 已经被 recent 层全文覆盖的章节不必再放摘要
   const cutoff = current - generation.recentChapters;
 
-  return [...sources.summaries.entries()]
+  const retrieved = (sources.retrievedMemories ?? []).map((memory) => ({
+    source: memory.source,
+    text: memory.text,
+    priority: 90 + Math.min(9, Math.floor(memory.score)),
+  }));
+
+  return [...retrieved, ...[...sources.summaries.entries()]
     .filter(([id]) => {
       const number = chapterNumber(id);
       return number < current && number < cutoff;
@@ -420,7 +445,7 @@ function summaryItems(sources: ContextSources, generation: GenerationConfig): Pe
       source: `summaries/${id}`,
       text: `【第 ${chapterNumber(id)} 章摘要】\n${text.trim()}`,
       priority: PRIORITY.summary,
-    }));
+    }))];
 }
 
 /* ── 打包 ─────────────────────────────────────── */

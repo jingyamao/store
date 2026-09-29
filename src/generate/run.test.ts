@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { loadConfig, writeDefaultConfig } from "../config/index.js";
@@ -10,7 +11,7 @@ import { writeTextFile } from "../store/file-io.js";
 import { scaffoldChapterOutline, writeChapterOutline } from "../store/outlines.js";
 import { captureError, expect, expectRejects } from "../testing/expect.js";
 import { createWorkspace, type TestWorkspace } from "../testing/workspace.js";
-import { checkDraft, generateChapter, listRuns, type RunRecord } from "./run.js";
+import { applyExistingRun, checkDraft, generateChapter, listRuns, readRunDetails, type RunRecord } from "./run.js";
 
 const opened: TestWorkspace[] = [];
 
@@ -273,6 +274,61 @@ describe("--apply", () => {
     await seedBook(ws);
 
     await expectRejects(() => runOnce(ws, { apply: true, dryRun: true }));
+  });
+});
+
+describe("人工选择与采用已有初稿", () => {
+  it("先生成开篇，再从同一记录选第二个方案续写；采用时不再调用模型", async () => {
+    const ws = await workspace();
+    await seedBook(ws);
+    const config = await loadConfig(ws.root);
+    const provider = mockProvider();
+    const openings = await generateChapter({ booksRoot: ws.booksRoot, chapterId: "ch-0004", config, provider, openingsOnly: true });
+    expect(provider.calls).toHaveLength(1);
+    expect(openings.draft).toBeUndefined();
+    const name = openings.runDir.split(/[\\/]/).at(-1) ?? "";
+    const savedOpenings = await readRunDetails(ws.paths, name);
+    expect(savedOpenings.openings).toHaveLength(3);
+    expect(savedOpenings.draft).toBe(null);
+    const draft = await generateChapter({ booksRoot: ws.booksRoot, chapterId: "ch-0004", config, provider, fromRun: name, pick: 2 });
+    expect((await readRunDetails(ws.paths, name)).draft?.trim()).toBe(draft.draft);
+    expect(provider.calls).toHaveLength(2);
+    expect(draft.pickedOpening).toBe("苏晚站在谷口，看了他很久。");
+    const target = await applyExistingRun(ws.paths, name);
+    expect(readFileSync(target, "utf8")).toBe(readFileSync(join(openings.runDir, "draft.md"), "utf8"));
+    expect(provider.calls).toHaveLength(2);
+  });
+
+  it("只有细纲且正文为空的新章节可以采用生成初稿", async () => {
+    const ws = await workspace();
+    await seedBook(ws);
+    const result = await runOnce(ws);
+    const name = result.runDir.split(/[\\/]/).at(-1) ?? "";
+    const target = await applyExistingRun(ws.paths, name);
+    expect(readFileSync(target, "utf8").trim()).toBe(result.draft);
+  });
+
+  it("作者打开初稿后正文若被别处修改，采用会拒绝覆盖", async () => {
+    const ws = await workspace();
+    await seedBook(ws);
+    const result = await runOnce(ws);
+    const name = result.runDir.split(/[\\/]/).at(-1) ?? "";
+    const emptyHash = createHash("sha256").update("").digest("hex");
+    const target = join(ws.paths.chaptersDir, "ch-0004.md");
+    await writeTextFile(target, "另一处刚写好的正文");
+    const error = await captureError(() => applyExistingRun(ws.paths, name, false, emptyHash));
+    expect(error.message).toMatch("已被其他操作修改");
+    expect(readFileSync(target, "utf8")).toBe("另一处刚写好的正文");
+  });
+});
+
+describe("章节目标字数", () => {
+  it("细纲目标字数优先于全局默认值", async () => {
+    const ws = await workspace();
+    await seedBook(ws);
+    await writeChapterOutline(ws.paths, ChapterOutlineSchema.parse({ chapter: "ch-0004", title: "落霞谷", intent: "林渊遇见苏晚", targetWords: 4200 }));
+    const result = await runOnce(ws, { dryRun: true });
+    expect(result.record.targetWords).toBe(4200);
   });
 });
 

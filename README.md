@@ -1,5 +1,9 @@
 # novel —— AI 网文创作工作台
 
+**新工作流与完整命令示例：**[使用指南](docs/user-guide.md)。
+
+**后续产品方向：**[下一阶段建议](docs/next-steps.md)。
+
 > 长篇一致性优先的人机协作写作工具。
 > **不提供「一键出全书」** —— 它管的是第 200 章时人物还没崩、伏笔还没忘、境界还没乱。
 
@@ -75,7 +79,7 @@ novel write ch-0001              # 真正生成
 novel chapter new ch-0002        # 建文件直接写
 novel chapter import ch-0003 draft.txt   # 导入外部稿子
 
-# 7. 写完立刻补摘要 —— 它是更早章节进入模型上下文的唯一途径
+# 7. 写完立刻补摘要 —— 它也是更早章节进入常规写作上下文的主要途径
 novel chapter summary new ch-0001
 novel chapter summary set ch-0001 -      # 从标准输入写入
 ```
@@ -83,6 +87,22 @@ novel chapter summary set ch-0001 -      # 从标准输入写入
 ---
 
 ## 生成一章
+
+### 长篇写作 Agent
+
+已有章节细纲后，推荐用 Agent 写初稿：
+
+```bash
+novel agent write ch-0004 --dry-run  # 查看多层记忆，不调用模型
+novel agent write ch-0004            # 检索旧章、规划场景、生成初稿
+novel adopt <记录 id>                 # 审阅后采用
+```
+
+写作台的「AI 助手」也有 **Agent 写初稿** 按钮。Agent 使用全书总纲、卷纲、人物和伏笔卡、近期正文、历史摘要，并从更早的定稿正文中检索与本章相关的段落。记忆按目标章节的时间点组装；已确认的 `sync apply` 状态差量可回推早期人物状态。运行目录额外保存 `agent-plan.md`、`agent-memory.json` 和 `prompt-plan.txt`，可核对规划和每条历史证据的来源。每次模型调用的 token 用量计入 `run.json`。
+
+首次使用前请给章节写清 `intent`、`cast`、`mustInclude` 和相关伏笔。历史检索目前基于关键词匹配；同义改写可能漏检，重要事实应写进人物卡、伏笔卡或细纲。手工修改的后期人物状态若没有同步差量，Agent 会隐藏其动态字段并给出告警，请补录历史状态后再写早期章节。模型上下文窗口仍是有限的，Agent 会按层预算裁剪并在超窗时停止。
+
+### 传统分步写作
 
 「人机协作」不是一句口号，它体现在这条命令的默认行为里：
 
@@ -102,10 +122,12 @@ novel write ch-0001
 Context Pack）、`prompt.txt`（原样发给模型的提示词）、`openings.md`、
 `draft.md`、`run.json`（用量、耗时、告警、自检）。
 
-**初稿默认不会进 `chapters/`。** 它只躺在 `runs/` 里等你看。确认要采用：
+**初稿默认不会进 `chapters/`。** 它只躺在 `runs/` 里等你看。推荐先只生成开篇、选定后续写，再采用同一份初稿：
 
 ```bash
-novel write ch-0001 --apply     # 已存在内容时会拒绝覆盖，除非加 --force
+novel write ch-0001 --openings-only
+novel write ch-0001 --from-run <记录 id> --pick 2
+novel adopt <记录 id>            # 已存在内容时会拒绝覆盖，除非加 --force
 novel runs                      # 忘了上次生成到哪了就查这个
 ```
 
@@ -224,8 +246,8 @@ novel status                           # 看覆盖率
 **建了骨架但没填内容不算覆盖** —— 系统会识别出来，不会谎报「已覆盖」。
 空摘要进了上下文只会白占 token。
 
-> 摘要现在得手工写。M4 会加上从正文自动抽取的路径，但「AI 抽的摘要要你
-> 过一眼」这件事不会变 —— 摘要错了，后面几十章全跟着错。
+> 摘要可以手工写，也可以用 `novel sync propose <章节>` 从定稿提取；后者需用
+> `novel sync apply <章节> --summary` 明确确认后才会进入长期记忆。
 
 ---
 
@@ -256,8 +278,8 @@ export DEEPSEEK_API_KEY=你的密钥   # bash
 Ollama 都提供 OpenAI 兼容接口。也可以用环境变量临时覆盖：
 `NOVEL_LLM_MODEL`、`NOVEL_LLM_BASE_URL`。
 
-> 除生成以外的所有命令（`init` / `status` / `lint` / `plan` / 集合 CRUD）
-> 都**不需要密钥**，零配置可用。
+> `write`、`sync propose`、`review --ai` 和 `ask` 会调用模型，需要密钥；
+> 其余本地命令不需要密钥。
 
 ---
 
@@ -274,8 +296,16 @@ Ollama 都提供 OpenAI 兼容接口。也可以用环境变量临时覆盖：
 | `novel plan show <chapter>` | 查看某一章的细纲 |
 | `novel plan new <chapter>` | 生成细纲骨架。`-t` 标题、`-f` 覆盖 |
 | `novel plan set <chapter> <path> <value>` | 改细纲的单个字段 |
-| `novel write <chapter>` | 生成一章初稿。`--dry-run` 只组装上下文不调模型、`--openings <n>`、`--pick <n>`、`--words <n>`、`--apply`、`--force` |
+| `novel write <chapter>` | 生成一章初稿。`--dry-run`、`--openings-only`、`--from-run <id>`、`--pick <n>`、`--words <n>` |
 | `novel runs` | 查看历史生成记录。`-n/--limit <n>` |
+| `novel adopt <run-id>` | 采用已审阅的初稿，不再次调用模型。`-f` 覆盖 |
+| `novel review <chapter>` | 规则体检；`--ai` 增加模型评审 |
+| `novel sync propose/show/apply <chapter>` | 从定稿提取、查看、逐项确认状态与摘要 |
+| `novel volume propose/show/adopt <volume>` | 从所属章节摘要生成、审阅、采用卷摘要 |
+| `novel index rebuild` | 重建 SQLite FTS5 检索索引 |
+| `novel search <query>` | 搜索正文、摘要、细纲和 Bible |
+| `novel ask <question>` | 检索后由模型回答，并列出资料来源 |
+| `novel serve` | 启动本地三栏写作台。`-p` 改端口 |
 | `novel chapter list` | 章节总览：细纲 / 正文 / 字数 / 摘要 |
 | `novel chapter new <chapter>` | 新建正文文件。`-f` 覆盖 |
 | `novel chapter show <chapter>` | 查看正文 |
@@ -355,7 +385,7 @@ books/<book_id>/
 │   └── chapters/ch-0001.yaml   章节细纲 ← M2 使用
 ├── chapters/
 │   ├── ch-0001.md              正文
-│   └── ch-0001.meta.yaml       元数据 + 状态 delta（M4 使用）
+│   └── ch-0001.meta.yaml       待确认状态提案与应用记录
 ├── bible/                      ← 心脏
 │   ├── characters.yaml         人物卡
 │   ├── items.yaml              物品
@@ -365,7 +395,8 @@ books/<book_id>/
 │   ├── settings.yaml           已立设定（硬规则）
 │   ├── threads.yaml            伏笔追踪
 │   └── timeline.yaml           故事内时间线
-├── summaries/                  章节 / 卷摘要（M4 之后才会有内容）
+├── summaries/                  已确认的章节摘要
+├── index.sqlite                可重建的 FTS5 检索索引
 └── runs/                       每次生成的完整记录 ← M2 使用
     └── 20250101-120000-ch-0001/
         ├── context.json        完整的 Context Pack（含裁剪详情）
@@ -377,7 +408,7 @@ books/<book_id>/
 ```
 
 **文件即真相。** Bible 全部是 YAML / Markdown，可以直接 `vim` 改、可以 diff、可以用 git 版本化。
-数据库（未来的 `index.sqlite`）只做检索索引，随时可重建。
+`index.sqlite` 只做检索索引，随时可用 `novel index rebuild` 重建。
 
 > `books/` 刻意没有被 `.gitignore` —— 每一次设定演进都值得留下历史。
 
@@ -489,7 +520,7 @@ books/<book_id>/
 ## 开发
 
 ```bash
-npm test           # 265 个测试（Node 内置测试运行器，零原生依赖）
+npm test           # Node 内置测试运行器，零原生依赖
 npm run typecheck  # tsc --noEmit
 npm run build      # 输出到 dist/
 node scripts/e2e.mjs   # 端到端验证，26 段断言（需要先 build）
@@ -507,10 +538,13 @@ node scripts/e2e.mjs   # 端到端验证，26 段断言（需要先 build）
 | **M0** | 骨架与数据模型（schema / 读写层 / 脚手架 / CLI） | ✅ 完成 |
 | **M1** | Story Bible 管理（CRUD / 伏笔追踪 / 17 条 lint） | ✅ 完成 |
 | **M2** | 单章生成闭环（Context Pack / 细纲 → 开篇 → 初稿 / runs 记录） | ✅ 完成 |
-| M3 | 自检四件套（AI 味检测 / 文风比对 / 爽点体检） | 待做 |
-| M4 | 状态回写闭环（AI 抽取 delta / diff 确认）+ 摘要自动抽取 | 待做 |
-| M5 | 写作台 UI（三栏布局 / 边写边告警） | 待做 |
-| M6 | 检索增强（FTS5 + 向量混合检索） | 待做 |
+| **M3** | 规则体检、文风统计、可选 AI 节奏评审 | ✅ 完成 |
+| **M4** | 状态提案、逐项确认回写、章节与卷摘要提取 | ✅ 完成 |
+| **M5** | 本地三栏写作台、自动保存与告警 | ✅ 完成 |
+| M6 | SQLite FTS5 全文检索与检索问答 | 已实现；向量检索仍为可选扩展 |
+
+写作台使用 Node 本地 HTTP 服务和原生页面，保持运行时依赖精简；技术方案初稿中
+的 React/Vite 选型未采用。写作流程与数据格式不依赖界面实现。
 
 完整方案见 [`docs/tech-plan.md`](docs/tech-plan.md)。
 
@@ -522,5 +556,5 @@ node scripts/e2e.mjs   # 端到端验证，26 段断言（需要先 build）
 M2 已完成，且补上了「手写正文 / 手写摘要」这条不经过模型的通路 ——
 没有它，工具就只是个模型前端，而不是写作工具。
 
-**下一步是先真实写 5 章**，用实际手感决定 M3 的优先级，而不是照着计划
-往下堆功能。写这 5 章的时候，摘要要随手补上：它是长程记忆唯一的载体。
+**下一步建议真实写 5 章**，检查状态提案的误报、漏报和长程检索命中率。
+每章定稿后确认摘要和状态变化，再写下一章。

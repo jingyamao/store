@@ -19,6 +19,8 @@ export interface WriteOptions {
   readonly words?: number | undefined;
   readonly apply?: boolean | undefined;
   readonly force?: boolean | undefined;
+  readonly openingsOnly?: boolean | undefined;
+  readonly fromRun?: string | undefined;
 }
 
 function fmt(value: number): string {
@@ -109,6 +111,8 @@ export async function runWrite(
     ...(options.words !== undefined ? { targetWords: options.words } : {}),
     ...(options.apply !== undefined ? { apply: options.apply } : {}),
     ...(options.force !== undefined ? { force: options.force } : {}),
+    ...(options.openingsOnly !== undefined ? { openingsOnly: options.openingsOnly } : {}),
+    ...(options.fromRun !== undefined ? { fromRun: options.fromRun } : {}),
     onProgress: progress,
   });
 
@@ -150,11 +154,11 @@ export async function runWrite(
     if (result.openings.length > 0) {
       lines.push(
         ui.bullet(
-          `开篇    ${ui.dim(`${result.runDir}/openings.md`)}  ${ui.dim(`（选中方案 ${result.record.openings.picked}）`)}`,
+          `开篇    ${ui.dim(`${result.runDir}/openings.md`)}${result.record.openings.picked === undefined ? "" : `  ${ui.dim(`（选中方案 ${result.record.openings.picked}）`)}`}`,
         ),
       );
     }
-    lines.push(ui.bullet(`初稿    ${ui.dim(`${result.runDir}/draft.md`)}`));
+    if (result.draft !== undefined) lines.push(ui.bullet(`初稿    ${ui.dim(`${result.runDir}/draft.md`)}`));
   }
   lines.push(ui.bullet(`记录    ${ui.dim(`${result.runDir}/run.json`)}`));
 
@@ -166,11 +170,15 @@ export async function runWrite(
   } else if (result.outputFile !== undefined) {
     lines.push("");
     lines.push(`${ui.green("✓")} 已写入 ${ui.bold(result.outputFile)}`);
+  } else if (result.draft === undefined) {
+    lines.push("");
+    lines.push(`${ui.yellow("!")} 先阅读开篇方案，再运行：`);
+    lines.push(`  ${ui.cyan(`novel write ${chapterId} --from-run ${result.runDir.split(/[\\/]/).at(-1)} --pick 1`)}`);
   } else {
     lines.push("");
     lines.push(
       `${ui.yellow("!")} 初稿尚未进入 ${ui.bold("chapters/")} —— 读过之后确认要采用，再运行：\n` +
-        `  ${ui.cyan(`novel write ${chapterId} --apply`)}`,
+        `  ${ui.cyan(`novel adopt ${result.runDir.split(/[\\/]/).at(-1)}`)}`,
     );
   }
 
